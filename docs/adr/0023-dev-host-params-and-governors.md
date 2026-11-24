@@ -1,12 +1,16 @@
 # ADR-0023: The dev host serves `@Params` contracts and `@AuthorizedBy` calls (ADR-0022 Q7)
 
-**Status:** Proposed (r18). Design only.
+**Status:** Proposed (r19). Design only.
 **Date:** 2026-11-21
 **Amends:** ADR-0022 (a dev host): its Q7 ("which milestone serves governors, and how the governor's applied script,
 reward address, redeemer and signers are pinned per deployment"), its D16 rows for `@AuthorizedBy` and `@Params`, its
 R3, its D3/D4 (the `initialize` protocol list: this ADR is protocol 2), D13 (including rule 3 for every `@Quorum`
-call) and D14 where stated. Everything else in ADR-0022 holds, as revised by its r8 (D8's one content-addressed map
-node store; D11's keyed retries resting on the designated input alone; `restore` without operation records).
+call), D14 and I7 (the npm host's `validators.json` is data outside the fingerprint, bound by hash, D4) where stated.
+Everything else in ADR-0022 holds, as revised by its r8 (D8's one content-addressed map node store; D11's keyed
+retries resting on the designated input alone; `restore` without operation records).
+**Requires ADR-0022 r8** (r19): r8 is on the dev-host stack (PR #156 and above), not in this PR's base
+(`docs/adr-0022-dev-host`, PR #142, which carries r7). This ADR merges only after r8 is on its base, or with it, and
+M4a's entry gate requires it (D9).
 **Builds on:** ADR-0009 D3 (`@AuthorizedBy`, the `Approvals` binding, the governor's obligations), ADR-0013 phase 3
 (`@Params` in the prepare service, R3), ADR-0015 M3 (governors from a page, `validators.json`).
 **Decided by the maintainer (2026-11-21):** Q7 gets an ADR before any implementation. **(2026-11-23):** Q6, option
@@ -14,7 +18,8 @@ node store; D11's keyed retries resting on the designated input alone; `restore`
 keeps ADR-0022 D13's structural checks. **(2026-11-23):** the chain provider, the wallet and the client's journal are
 trusted, as in any CCL or MeshJS app; only the host (like the prepare service) is not. r18 simplifies to that model.
 **Facts** are pinned per row: `main` `d529bfd0` for the runtime, JS, processor and examples; PR #156's head `4335773d`
-(ADR-0022 M3a) for the hosts. `DescribedContract.java` and `StateContractHandle.java` differ between the two pins; the
+(ADR-0022 M3a) for the hosts; `4b599e6b` (PR #156's final head, ADR-0022 r8) for the keyed and restore rules this ADR
+relies on (F9, F15). `DescribedContract.java` and `StateContractHandle.java` differ between the first two pins; the
 rows cite the pin they were read at.
 **Risk:** high. Nothing here changes a validator or what a page verifier accepts; descriptions gain only an additive
 params `format` marker (D2a, from r10). But it lets the host
@@ -47,19 +52,19 @@ parameterized contract's script hash, address and policy are not in the build: t
 | F6 | A script's `cborHex` in JOUST's artifacts is a CBOR byte string **of** a CBOR byte string of the flat program. The ledger's hash is `blake2b_224(0x03 ‖ S)`, where `S` is the inner CBOR byte string (the outer wrapper removed); hashing the outer or the bare flat bytes gives other hashes (reproduced on `fixtures/m3/treasury-governor/017-freeze.json`'s Guardian) | #157 review X1; `fixtures/m3/treasury-governor/017-freeze.json` (fixtures at `d529bfd0`; the JuLC 0.1.0-pre22 / CCL 0.8.0-pre8 re-recording in #148 moves Guardian's hash and the spend redeemer's index, so the vectors are regenerated at M4a's entry) |
 | F7 | Governors are plain JuLC validators. Gradle writes them as **generated** resources `META-INF/plutus/<SimpleName>.plutus.json` (`cborHex`, empty `hash` when parameterized, `params` such as `"owner:byte[]"`; reproduce with `./gradlew :examples:treasury:classes`), resolved by `ValidatorScripts` beside the defining class, detecting ambiguity; the npm toolchain writes `build/joust/validators.json` (`[{name, purpose, script, scriptHash, built, params}]`, with the package) | `ValidatorScripts.java:27-54`, `:138-155`; `js/joust/src/build.js:7`, `:165-176` at `d529bfd0` |
 | F8 | The example: `Treasury`'s `@Params record Config(Credential guardian, BigInteger maxPayout)`; `freeze` is `@AuthorizedBy("params.guardian")` with no `Ctx`, `@SignedBy` or `@Quorum`. `Guardian` is a `@WithdrawValidator` with `@Param byte[] owner`, approving when the purpose is Rewarding and `owner` signed. The recorded `freeze` has a V3 governor witness, a zero withdrawal from `f0‖hash`, and redeemers at `(spend,1)` and `(reward,0)` | `Treasury.java:31`, `:73`; `Guardian.java:17-26`; `fixtures/m3/treasury-governor/017-freeze.json` (fixtures at `d529bfd0`; the JuLC 0.1.0-pre22 / CCL 0.8.0-pre8 re-recording in #148 moves Guardian's hash and the spend redeemer's index, so the vectors are regenerated at M4a's entry) |
-| F9 | A body's required signers: the caller's key **only when** the method uses `Ctx` or `@SignedBy`; then every extra signer (co-signers, governor signers), deduplicated. The payer still witnesses its own inputs | `StateInstance.java:199-207`; `DescribedContract.java:310-313` at `d529bfd0` |
+| F9 | A body's required signers: the caller's key **only when** the method uses `Ctx` or `@SignedBy`, or the call is a keyed insert of a type declared `signedKey` (ADR-0016 I53: the inserted key must be a signatory); then every extra signer (co-signers, governor signers), deduplicated. The payer still witnesses its own inputs | `StateInstance.java:199-207`; `DescribedContract.java:310-313` at `d529bfd0`; `KeyedList.java:344` at `4b599e6b` |
 | F10 | JOUST's page verifier, for a governor call: verifiable only when the credential is in the deployment's params; exactly one script credential; instance actions only; the governor's hash equals the params' credential; exactly one Rewarding redeemer **at the governor's withdrawal index**, equal to `Approvals[Approval(policy, instance, tag)]`. It does **not** examine a Rewarding redeemer at another reward index | `verify.js:124-192`, `:485-509`, `:515-536` at `d529bfd0` |
 | F11 | The page's governor registration check: one pure registration of exactly the governor's script credential, the protocol deposit, wallet-only inputs and outputs, no withdrawals, mint or redeemers; it counts Plutus witness scripts and **allows an absent TTL** | `governors.js:56-114`; `ledger.js:101` at `d529bfd0` |
 | F12 | Generated clients take the params record (`deploy(runtime, Config, …)`, `at(runtime, Config, instanceId)`) and an `Authorization` argument for `@AuthorizedBy` methods | `ClientGenerator.java:99-106` (`contract(runtime, P params)`, `policyIdFor`), `:120-121` (`deploy`), `:179` (`at`), `:731`, `:758` (`Authorization`); `TreasuryClient` (generated) |
 | F13 | The JVM host's adapter refuses `@Params`, looks contracts up without params, and accepts extra accounts only for `@Quorum`; `Contracts.code` returns the contract-wide `params` before any method's `authorizedBy`, so Treasury's `freeze` reports `params` today | `ServedContract.java:69-70`, `:117`, `:147-149`, `:258`; `Contracts.java:37-42`, `:78`, `:94` at `4335773d` |
-| F14 | The npm host fingerprints and reads `contracts.json` and the two engine files, not `validators.json`; at the final M3b pin it also fingerprints the **launch closure** (the host's JavaScript files and package manifests captured at launch), all as lines `<sha256> 0 dir <path>` sorted by the paths' bytes | `js/joust/src/host/launch.js:32-51` at `4335773d`; `:28-38` at `2ffaf41b` |
-| F15 | ADR-0022 D8 excludes live out-refs across the whole session; ADR-0022 D11's persisted keyed operation is `{designated, contract, method, instance, key, attempts}`, with no policy | `Reservations.java` (`prepare`, `avoids`); `KeyedOperation.java:8-26`, `:40-45` at `4335773d` |
+| F14 | The npm host fingerprints and reads `contracts.json` and the two engine files (and, from M3b, its launch closure); it neither fingerprints nor reads `validators.json` | `js/joust/src/host/launch.js:32-51` at `4335773d`; `:28-38` at `2ffaf41b`; `:28` at `4b599e6b` |
+| F15 | ADR-0022 D8 excludes live out-refs across the whole session; ADR-0022 D11's persisted keyed operation is `{designated, contract, method, instance, key, attempts}`, with no policy; D11's rules 3 (`pending` on a reserved designation or object unit) and 4 (`mayHaveLanded` when the designation is spent) are checked per call, and a body's keyed tokens are recognized structurally (by the holding output's payment script hash), so an applied policy is covered | `Reservations.java:23-29` (`Body.keyedTokens`), `:144-146`, `:172` (`avoids`), `:193-195` (`checkOperation`); `KeyedOperation.java:11-12` at `4b599e6b` (ADR-0022 r8) |
 | F16 | ADR-0009 D3 refuses a governor equal to the contract's own script or either shared verifier, and allows native-script governors; no runtime path builds a native governor (F2) | ADR-0009 `:77-100` |
 | F17 | The schema codec sorts a typed map's entries by their keys' CBOR in RFC 8949 length-first order and refuses duplicates; JuLC's encoder and the JVM adapter's JSON values keep the order given. Reversing two map entries changes the applied hash (#157 review X12) | `SchemaCodec.java:118-132` at `d529bfd0` |
 | F18 | The output verifier's Rewarding redeemer is `OutputClaims(claims, deposits)`, the map verifier's `MapClaims(claims)`; the builders omit a verifier's withdrawal when its claim list is empty | `julc-state-api/.../OutputClaims.java:12`, `.../mpf/MapClaims.java:7`; `AssetTx.java:258-262`; `Compose.java:210-223` at `d529bfd0` |
 | F19 | Protocol 1's result schemas are **closed**: `initialize`, its `contracts` items, `describe`, its `calls` items and `deployment` all set `additionalProperties: false`, and `initialize.protocol` is `const 1`. Both hosts share one `Session`, which accepts any list of integer protocol versions containing 1 and answers protocol 1 (`no common protocol version` otherwise): offering `[1, 2]` to an M1–M3 host selects 1 | `docs/protocol/dev-host-1/results.schema.json`; `Session.java:95-104`, `:120`; `EngineSession.java:34` at `4335773d` |
-| F20 | Restore recognizes a keyed body by its **keyed tokens** (29-byte names beginning `0x4B`, held at an output whose payment script hash is their policy, or minted) and refuses an entry without a matching `operation` only when those tokens are under a **catalog contract's hash**; for a `@Params` contract the catalog holds the unapplied template hash, so an applied policy escapes that guard. **(r18: ADR-0022 r8 removed this record check from `restore`; no decision here relies on it)** | `Reservations.java:14-33` (`Body.keyedTokens`), `:261-269` at `4335773d` |
-| F21 | The npm build writes `validators.json` (and each `<name>.plutus`) **only when** the build has validators, and never removes an earlier one: a rebuild that drops the last validator leaves the old manifest in place. It clears only `generated/`. `joust.lock.json` **is** rewritten by every successful build, and its `validators` map (`"<package>.<name>"` → `{purpose, scriptHash}`) is present only when the build has validators | `js/joust/src/build.js:115`, `:164-177` at `d529bfd0` and `4335773d` |
+| F20 | *(withdrawn in r19: it described a `restore` record check that ADR-0022 r8 removed)* | — |
+| F21 | The npm build writes `validators.json` (and each `<name>.plutus`) **only when** the build has validators, and never removes an earlier one: a rebuild that drops the last validator leaves the old manifest in place. It clears only `generated/` | `js/joust/src/build.js:115`, `:164-177` at `d529bfd0` and `4335773d` |
 | F22 | The two codecs differ on integers and limits: `JsonValues` (JVM adapter) accepts a decimal string of 1–200 digits or a JSON integer with \|n\| ≤ 2^53, and caps collections at 1,024 items, nesting at 32 and byte strings at 16,384 bytes; `SchemaCodec` (engine) accepts a decimal string of any length and any JSON integer, with no collection limit | `JsonValues.java:37-38`, `:68`, `:90`, `:97`, `:149-157` at `4335773d`; `SchemaCodec.java:170-173` at `4335773d` |
 
 ## 2. Threat model and trust assumptions
@@ -72,20 +77,22 @@ any CCL or MeshJS application (ADR-0022 D11 r8); defending against a lying provi
 - **T12. Wrong parameters, right shape.** The host builds a perfectly shaped call to a *differently parameterized*
   contract (another guardian, another limit). Only a client that **derives the applied hash itself, from bytes it
   encoded itself** (D3), sees it. Two encodings of the same values are two contracts (F5).
-- **T13. Borrowed or widened approval.** A governor approval for another instance, action or contract; extra
-  approvals in the list; approval data placed at another reward pointer (F10).
+- **T13. Borrowed approval.** A governor approval for another instance, action or contract, or approval data placed
+  at another reward pointer (F10). Extra approvals in the list are inert: no other script that could consume them
+  runs (ADR-0022 D13).
 - **T14. A governor that approves everything:** the contract's own script or a shared verifier as governor (F16).
 - **T15. Extra signers:** governor signers or co-signers smuggling a required signer the user does not expect.
-- **T16. Wrong governor artifact:** two validators with one simple name, or a manifest that differs from the one the
-  client read, stale or changed (F7, F14, F21). The governor is bound by its applied hash (D4, D5), so a wrong
-  artifact can only make a call fail closed.
+- **T16. Wrong governor artifact:** two validators with one simple name, or a manifest that is stale, changed or
+  half-written (F7, F14, F21). The governor is bound by its applied hash (D4, D5), so a wrong artifact can only make a
+  call fail closed. One residual is a build matter, not a host attack: a client that derives a credential for the user
+  at deployment from a stale build deploys a contract governed by that stale governor. The client shows the hash it
+  derived, and freshness is the build's job (F21), as for `contracts.json`.
 - **T17. A well-shaped approval that cannot execute** (X21): signers that pass a set-equality check but are not
   eligible (an outsider in a quorum, a signer other than the one a governor's rules require). The ledger rejects it in
   phase 2 and the submitter forfeits the collateral. ADR-0022 D13 bounds that collateral but does not evaluate scripts;
   D5 counts quorum eligibility from the client's own reads, and, for script-governor calls, has the client evaluate
   phase 2 itself (Q6, decided (a)). Other calls keep the bounded-collateral exposure ADR-0022 accepts.
-- **T18.** *(withdrawn in r18)* A journal that hides a keyed operation: the client's journal is trusted, and ADR-0022
-  r8 keeps no keyed records in `restore`.
+- **T18.** *(withdrawn in r18.)*
 
 **Accepted liveness limit** (Y12): Conway requires a withdrawal to equal the reward account's whole balance, and
 anyone can credit a registered account (a proposal's deposit return, a treasury withdrawal naming it). A governor
@@ -94,7 +101,7 @@ governor's owner sweeps the account outside the dev host. ADR-0022's shared veri
 
 **Trust assumption (unchanged in kind):** a governor is project code, like the contract. JOUST cannot verify that it
 lists only the approvals its rules grant or refuses certificates (ADR-0009's obligations); the client shows which
-governor, by qualified name and hash, authorises the call.
+governor authorises the call, by hash, and by qualified name where it resolves the artifact (D5).
 
 ## 3. Decision
 
@@ -114,13 +121,13 @@ its own schemas (`docs/protocol/dev-host-2/`, protocol 1's with those additions)
   method at `4335773d`: `Session.query` (`deployment`, `view`, `instances`, `objects`) checks the contract's support
   first, so Treasury's `deployment` with `params` is `unsupported/params`; `prepare` checks the call's field list
   first and `decode` its fields before the contract lookup, so Treasury's `prepare` with `call.params` and `decode`
-  with `params` are `bad/request`. The oracle is the M3 host itself, compared field by field (X39): `fingerprint` and
-  `versions` are checked against each launch independently (ADR-0022 D4: they must name the actual snapshot and
-  runtime, so they differ between releases), and every other field, the capability list and every error code must
-  equal the pinned M3 host's under identical project and chain fixtures. **The pinned M3 host is the final M3b host**
-  (X46), with its `dev-host-1` schemas, recorded at M4a's entry: M3b adds `maps` to `capabilities` and
-  `assetHistory`, `redeemers` and `datum` to `reads` for map contracts, so the rules above cite `4335773d` (M3a) for
-  the precedence they quote, and M4a re-verifies that precedence at the M3b pin.
+  with `params` are `bad/request`. **The oracle is protocol 1's own conformance material** (r19, replacing r10–r11's
+  pinned M3 host binary, X39, X46): the `dev-host-1` conformance kit and result schemas of the final M3b release, run
+  unchanged against a host that ships this ADR and is offered `[1]`, plus the three precedence examples above as
+  plain vectors. `fingerprint` and `versions` are checked against each launch (ADR-0022 D4: they name the actual
+  snapshot and runtime). M3b adds `maps` to `capabilities` and `assetHistory`, `redeemers` and `datum` to `reads` for
+  map contracts, so the rules above cite `4335773d` (M3a) for the precedence they quote, and M4a re-verifies that
+  precedence at the final M3b head.
 - The alternative, a client opt-in field in `initialize`, fails because M1–M3
   hosts refuse an unknown `initialize` field, so the client could not offer it without knowing the host's version.
   The protocol list is the negotiation ADR-0022 already defines.
@@ -147,18 +154,18 @@ is `unsupported`, code `params` (protocol 1's answer); present but outside the d
   datum names. **Reservations are not keyed by policy:** ADR-0022 D8's out-ref exclusion stays session-wide, so two
   parameterizations can never reserve the same payer input or collateral (F15).
 - **Keyed calls follow ADR-0022 D11 (r8) unchanged** (r18). The persisted `operation` stays `{designated, contract,
-  method, instance, key, attempts}`, and its identity must equal the call's. Every attempt spends the designated
-  input, so the ledger lets at most one attempt land, whatever params each names; a retry naming other params is
-  another body spending the same designation, and D11's rules 3 (`pending`) and 4 (`mayHaveLanded`) apply to it as to
-  any keyed retry. The host keeps no attempt history and does not check the client's journal against itself: the
-  chain provider, the wallet and the client's journal are trusted (§2).
+  method, instance, key, attempts}`, and its identity must equal the call's (F15). An instance id derives from its
+  seed out-ref (`StateContractHandle.instanceIdOf`), and a seed is spent once, so an instance exists under one applied
+  policy only; every attempt spends the designated input, so the ledger lets at most one land. The host keeps no
+  attempt history and does not check the client's journal against itself: the chain provider, the wallet and the
+  client's journal are trusted (§2).
 - **Restore** is ADR-0022 D8's, unchanged: transactions and their states, no `params` and no operation record. A
   pending keyed body of a parameterized contract is restored like any other; its designated input is one of its
   inputs, so it is reserved again (ADR-0022 D11).
 - **Withdrawn in r18** (r2–r17's keyed-record and restore rules, written before ADR-0022 r8 removed the record from
   `restore`): `operation.policy` and `operation.template`, the template predicate R, retired operations, a restore
   entry's `params`, the restored-body discard guard, the link, retirement and attach rules for recordless bodies, and
-  the per-policy `mapsStale` scope (X19, X22, X23, X27, X33, X34, X40, X42, X47, X52, X54, X56–X61; Y10).
+  the per-policy `mapsStale` scope (X19, X22, X23, X27, X33, X34, X40, X42, X47, X52, X54, X56–X58, X60, X61; Y10).
 - `deployment`'s result adds `params` (the Data, CBOR hex, D3's encoding) and the **applied** `scriptHashes` (`spend`,
   `mint`, `stake`) beside `unapplied`; the client requires `params` to equal its own bytes. **`deployment.governors`
   stays empty in protocol 2** (Y2): governors are named per call (D4), never pinned in a deployment; a client
@@ -217,6 +224,11 @@ A value outside the domain is `bad`, code `params` (`governor` for a governor's 
 on both hosts. The domain is part of the protocol-2 schemas, and D8's boundary vectors pin it. (The same mismatch for
 ordinary call arguments belongs to ADR-0022 M2, PR #154; this ADR covers params.)
 
+Under the trust model the formats buy identical refusal codes on both hosts, not safety: D3 and the client's
+comparison of `deployment.params` with its own bytes already fail a codec divergence closed. **If M4a proves heavy,
+this is the first cut** (r19): serve only params records of `BigInteger`, `byte[]`, `boolean`, records, lists and
+maps, and report the rest `unsupported/params`.
+
 ### D3. The client anchors on its own application, byte for byte (amends ADR-0022 D13 rule 2)
 
 For a parameterized contract (and for a governor, D4) the client must, from the verified snapshot only:
@@ -254,25 +266,25 @@ An `@AuthorizedBy` action whose credential is a script takes **`governor`** in `
   language field (F7), and the format **implies Plutus V3** (the toolchain emits nothing else); both must have
   purpose `withdraw` (`bad`, code `governor`, otherwise), and D5 checks the witness's language independently.
 - **The governor artifact is bound by its hash, not by the fingerprint** (r18; replaces r2–r17's fingerprint
-  version 2, X17, X24, X31, X37, X41, X48, X51, X53, Y13). The client resolves the validator from its own snapshot
-  (the rule below), applies `governor.params` (D3) and requires the applied hash to equal the script credential in its
-  own params; the host does the same, and D5 requires exactly one witness script hashing to it. A manifest that
+  version 2, X17, X24, X31, X37, X41, X48, X51, X53, Y13). The host resolves the validator (below), applies
+  `governor.params` (D3) and refuses a result that does not hash to the script credential in the contract's params;
+  the client requires exactly one witness script hashing to that credential and evaluates it (D5). A manifest that
   changed, went stale or was half-written can therefore only make a call fail closed (`bad/governor` at the host,
-  `governor` at the client), never authorise another script. So ADR-0022 D4's fingerprint is unchanged: no
-  `fingerprintVersion`, no `fingerprint:2`, no lock-file digests and no build marker. The npm host loads
-  `validators.json` with the rest of the snapshot at `initialize`. One build fix stays (M4c, F21): the npm build
-  writes `validators.json` on every successful build, `[]` when there are no validators, and removes stale
-  `<name>.plutus` files, so a removed validator is no longer found.
-- **The client resolves the same artifact by a written rule** (T16; Y3), independently of the host:
-  - **Gradle:** locate `<package path>/<SimpleName>.class` in the **first** snapshot class-path entry, in ordinal
-    order, that holds it; read `META-INF/plutus/<SimpleName>.plutus.json` **from that same entry**. Refuse (`governor`)
-    when that entry holds another class with the same simple name, the resource is missing, `type` is not
-    `PlutusScriptV3`, `purpose` is not `withdraw`, or its `params` list differs from `governor.params` in arity or in
-    the declared types.
-  - **npm:** exactly one `validators.json` entry with that `{package, name}` (more than one, or none, is refused), with
-    purpose `withdraw` and a `params` list matching `governor.params` as above.
-  The host applies the same rule (ValidatorScripts resolves beside the defining class and refuses ambiguity, F7), and
-  the kit has a refusal vector for each clause (D8).
+  `governorWitness` at the client), never authorise another script. So ADR-0022 D4's fingerprint is unchanged: no
+  `fingerprintVersion`, no `fingerprint:2`, no lock-file digests and no build marker. One build fix stays (M4c, F21):
+  the npm build writes `validators.json` on every successful build, `[]` when there are no validators, and removes
+  stale `<name>.plutus` files, so a removed validator is no longer found.
+- **Where the host finds the artifact** (T16; Y3, reduced to the host in r19): Gradle,
+  `META-INF/plutus/<SimpleName>.plutus.json` beside the defining class, as `ValidatorScripts` resolves it, refusing
+  ambiguity (F7); npm, the one `validators.json` entry with that `{package, name}`. Ambiguity, a missing entry or a
+  purpose other than `withdraw` is `bad/governor`; any other mis-resolution surfaces as the hash mismatch above.
+  Clients do not resolve the artifact to check a call (D5).
+- **`validators.json` on the npm host** (X63; r19): a protocol-1 session never reads it (I21). In protocol 2 the host
+  reads it at `initialize` as data **outside ADR-0022 D4's fingerprint** (amends ADR-0022 I7: the file is bound by
+  hash, D5, not by the digest). An absent file is an empty catalog (builds before M4c write none, F21); a file that
+  does not parse fails only the requests that name a `governor` (`bad/governor`, naming the file), never
+  `initialize` or any other request. The host keeps the copy it read, so after a rebuild its `bad/governor` message
+  says to restart the host.
 - **`params`**: its `@Param` values in declaration order, as JSON of their declared types (`byte[]` hex, `BigInteger`
   integer or decimal string, `boolean` JSON boolean only, `PlutusData` CBOR hex), each within D2a's domain, encoded
   and applied as D3 says. Wrong arity or type, or a value outside the domain, is `bad`, code `governor`.
@@ -305,8 +317,9 @@ refusing `@Params` (R3) and `@AuthorizedBy`, with its current answers, and a tes
 In addition to ADR-0022 D13:
 
 **Signers** (T15, F9). The body's required signers must equal exactly, as a set:
-`{caller, if the method uses Ctx, @SignedBy or @Quorum}` ∪ `{named co-signers}` ∪ `{the key credential, for a key
-call}` ∪ `{governor.signers, for a script call}`. Wallet witnesses (the payer's inputs and collateral) are separate and
+`{caller, if the method uses Ctx, @SignedBy or @Quorum, or the call is a keyedInit of a keyed type declared
+signedKey (ADR-0016 I53; X62)}` ∪ `{named co-signers}` ∪ `{the key credential, for a key call}` ∪ `{governor.signers,
+for a script call}`. Wallet witnesses (the payer's inputs and collateral) are separate and
 are not required signers. For a key call, the credential's key (from the client's own params) must be the caller or
 a named co-signer; co-signers are allowed only for `@Quorum` or to supply that key. The key holder need not be the
 caller or the payer: with credential B, payer A and `cosigners: [B]` on a method with no `Ctx`, `@SignedBy` or
@@ -348,7 +361,7 @@ signers authorize the call:
   - **the evaluator** is the client's own (IntelliAda can use JuLC's VM; npm clients the engine's evaluator). It may
     share an implementation with the host; the independence that matters is of its inputs, cost models and budgets,
     which the host never supplies. D8's evaluation vectors pin its results.
-  - **the bytes it evaluates are the bytes received** (X59): the evaluator is given the transaction exactly as
+  - **the bytes it evaluates are the bytes received** (X59; tested by a seam test, D8): the evaluator is given the transaction exactly as
     received, never a decoded and re-encoded copy, since a script's `TxInfo` (its transaction id above all) is
     derived from those bytes and a valid body can re-encode differently. **Implementation defect to fix in M4c:** the
     engine's `Offline.evaluate` decodes the transaction (`Transaction.deserialize`,
@@ -372,8 +385,9 @@ and withdraws zero. Their pointers are their indices in the withdrawals sorted i
 account: network tag, then script credentials before key credentials, then the hash bytes), computed by the client
 independently of the order the body's CBOR map happens to use (F-Y6); **every** pointer has
 exactly one Rewarding redeemer, **decoded by purpose against its own type** (X13):
-- the governor's: `Approvals` with **exactly one** `Approval(policy, target, action)` (the applied policy, the
-  instance's token name, the method's redeemer constructor index from the client's description);
+- the governor's: `Approvals` **containing** `Approval(policy, target, action)` (the applied policy, the instance's
+  token name, the method's redeemer constructor index from the client's description); other approvals in the list
+  are inert, since no other script that could consume them runs (ADR-0022 D13; r19);
 - the output verifier's: `OutputClaims` (F18), with claims for the call's sends as ADR-0022 D13 bounds them;
 - the map verifier's: `MapClaims` (F18), as ADR-0022 M3's rules check them.
 
@@ -382,10 +396,13 @@ Rewarding redeemer at any other pointer, a duplicate or a missing one. **A verif
 when the call produces claims for it** (the builders omit it for an empty claim list, F18): a withdrawal without
 claims, or claims without their withdrawal, is refused.
 
-**The governor** (T12, T14, T16): its hash is the credential in the client's own params; the client applies the
-`governor.params` it sent to the governor from its snapshot (D3) and requires the same hash; the hash is not the
-contract's, the output verifier's or the map verifier's; **exactly one** V3 script in the witness set hashes to it
-(missing or reference-only is refused); no other script but those ADR-0022 D13 allows. Instance actions only.
+**The governor** (T12, T14, T16; reduced to the hash binding in r19): its hash is the script credential in the
+client's own params; **exactly one** inline Plutus V3 script in the witness set hashes to it (missing or
+reference-only is refused, `governorWitness`); that hash is not the contract's, the output verifier's or the map
+verifier's; no other script but those ADR-0022 D13 allows; and the client's phase-2 evaluation of the transaction
+passes (above). The client does not resolve or apply the governor's artifact to check a call: the ledger runs only a
+witness script that hashes to the credential, and the client evaluates that exact script. A client may resolve it
+(D4's lookup) to show the governor's name; a mismatch only drops the name. Instance actions only.
 
 **Registration** (D6; Y11): a governor's registration is accepted only as a **pure legacy (kind 0) stake registration**
 of the governor's credential, in ADR-0022 D14's `stakeRegistration` shape, **with the mandatory upper bound**, and
@@ -427,8 +444,8 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 | raw `PlutusData` with a constructor index above 2^63 − 1 at any depth | `bad/params` on both hosts (D2a) |
 | a key-credential call on a host without `authorizedBy:key` | `unsupported/authorizedBy` ("key credentials") |
 | a script-credential call on a host without `authorizedBy:script` | `unsupported/authorizedBy` ("script governors") |
-| a governor whose resolved artifact, with `governor.params` applied, does not hash to the credential in the params (a stale, changed or ambiguous manifest included) | `bad/governor` at the host; the client refuses `governor` (D4, D5) |
-| a keyed retry naming other params than an earlier attempt of the same operation | ADR-0022 D11's rules unchanged: `pending` while an attempt is within its window, `mayHaveLanded` once the designation is spent (D2) |
+| a governor whose resolved artifact, with `governor.params` applied, does not hash to the credential in the params (a stale, changed or ambiguous manifest included) | `bad/governor` at the host; a body with no witness script hashing to the credential is refused by the client (`governorWitness`) (D4, D5) |
+| `validators.json` absent, or not parseable, on the npm host (protocol 2) | absent: no validators; not parseable: requests naming a `governor` `bad/governor`, every other request answered as usual (D4) |
 | a client sends `params` or `governor` to a host without the capability | `bad/request` (strict field lists); clients send them only after the capability (D2) |
 | `initialize` on a host with `params`, a parameterized contract **whose description carries the `formats` marker** | `unapplied` hash and `parameterized: true`, no `unsupported` (D2); an unmarked one keeps `unsupported: "params"` (row above) |
 | `describe` of an `@AuthorizedBy` method | `served: true` when **its contract is served (marked, D2) and the method passes its other support checks**, and either credential branch is served; otherwise its own `unsupported` code (`params` on an unmarked contract); the call entry adds `authorizedBy: [{field, branches}]` so a client knows which branch its params will need |
@@ -468,7 +485,7 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   checker); non-zero, second, missing, or wrong-network-tag governor withdrawal; governor-plus-output-verifier in
   **both** ledger orders (positive), and approval data at the verifier's pointer (`verifierRedeemer`); a verifier withdrawal without claims, and claims
   without it; `Approvals` naming another instance,
-  action or policy, or an extra approval; a shifted pointer; missing governor witness and reference-only governor;
+  action or policy (an extra approval besides the right one is accepted); a shifted pointer; missing governor witness and reference-only governor;
   payer ≠ governor owner (positive, F8), caller-as-key with a `@Quorum` co-signer (positive), overlapping keys, a
   missing, extra or substituted named signer; registration of a wrong target, without TTL, already registered, and
   `unknown`.
@@ -476,15 +493,19 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   A and `cosigners: [B]` (no `@Quorum`, `Ctx` or `@SignedBy`): the body requires exactly `{B}`, A witnesses its inputs,
   and the reference checker accepts; with the old quorum-only co-signer gate it would be refused, so the vector fails
   an adapter that kept it.
+- **Signed-key insert (X62), both hosts:** `Keys`'s `Pass.issue` (`examples/dsl`, a keyed insert of a `signed` type
+  with no `Ctx`) with the caller as holder: the body requires exactly `{caller}` and the checker accepts; the same
+  body with that required signer removed is refused.
 - **Governor evaluation (Q6 (a), I24), M4c:** an honest Guardian `freeze` (evaluates, accepted); the same body naming
   a signer other than Guardian's applied `owner` (every structural rule passes; refused `evaluation`); a redeemer
   whose declared units are lowered below what the script needs, with the integrity hash recomputed (refused); declared
   units above the protocol's per-transaction limit (refused); a host whose reads disagree with the client's node on a
   spent input's datum (the client evaluates with its node's answer); and a key-credential `freeze` and an M3 call
-  (not evaluated: structural checks only, as ADR-0022); and **a valid body whose CBOR re-encodes differently**
-  (for example an indefinite-length list where the encoder writes a definite one) with a governor that checks its
-  own transaction id against a value in its redeemer: the client's evaluation, on the received bytes, sees the
-  received body's hash and accepts; an evaluation of the re-encoded bytes would refuse (X59).
+  (not evaluated: structural checks only, as ADR-0022); and a **received-bytes seam test** on both client paths (the
+  engine's `Offline.evaluate` and a JVM client's `evaluateTx` call): for a valid body whose CBOR re-encodes
+  differently (an indefinite-length list where the encoder writes a definite one), the byte array handed to the
+  evaluator is the one received (X59). r19 replaces r17's end-to-end transaction-id vector, which cannot be built: a
+  redeemer cannot hold the id of a body whose integrity hash commits to that redeemer (X64).
 - **Quorum eligibility (X21, X29):** a 2-of-3 Treasury council `pay` whose required signers are the caller (a member) and
   an outsider: signer-set equality holds and the checker refuses `quorum`; the same with two members (positive); a
   duplicate member key counted once (refused). For an **owned** `@Quorum` call whose owned record's council differs
@@ -494,38 +515,39 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   only refused). Each positive is **prepared by both hosts' dispatchers** and accepted by the checker, the removal
   included (X45); a `keyedRetire` with `@Quorum` fails to build (processor test). M4a needs fixture contracts for
   these (owned, keyed and removal quorum), added to its entry gates.
-- **Identity tests:** two parameterizations competing for one wallet out-ref (refused); two keyed operations of two
-  parameterizations naming one designated input (the second `pending`); a keyed retry naming other params while the
-  first attempt is within its window (`pending`) and after it expired unlanded (prepared; both spend the designation,
-  so at most one lands); a pending keyed `@Params` body restored after a restart (its inputs, the designation among
-  them, reserved again; a new keyed operation on the object `pending`); restarts with a pending **bounded governor
-  registration** and a pending **reference-script publication** of a parameterized contract (both restored,
-  positive, by D8's path); two packages with a `Guardian` (the Gradle qualified selector works; ambiguity fails
-  closed).
+- **Identity tests (M4a):** two parameterizations competing for one wallet out-ref (refused); two keyed operations
+  of two parameterizations naming one designated input (the second `pending`); a pending keyed `@Params` body
+  restored after a restart (its inputs, the designation among them, reserved again; a new keyed operation on the
+  object `pending`); a restart with a pending **reference-script publication** of a parameterized contract (restored,
+  positive, by ADR-0022 D8's path).
+- **Governor identity tests (M4c; moved from M4a in r19):** a restart with a pending **bounded governor
+  registration** (restored, positive); two packages with a `Guardian` (the Gradle qualified selector works;
+  ambiguity fails closed).
 - **Stale manifest (r18), M4c:** build Treasury with Guardian, remove the last validator, rebuild in the same
   directory, launch: `validators.json` is `[]`, its `.plutus` file is gone, and a `freeze` naming Guardian is
-  `bad/governor`; a manifest holding a Guardian build other than the one the params name (another `owner`
-  default, say): `bad/governor` at the host and, with the host's answer forged, `governor` at the client.
+  `bad/governor`; a manifest holding a Guardian whose code changed (so its applied hash differs): `bad/governor` at
+  the host, and a forged body carrying that script is refused by the client (`governorWitness`). **Absent and
+  malformed manifests (X63):** an ordinary `prepare` against a pre-M4c build with no `validators.json` is served; with
+  a manifest that does not parse, `initialize` and an ordinary `prepare` succeed and a `freeze` is `bad/governor`.
 - **Signer count (X50), both hosts:** 64 and 65 `governor.signers` entries (accepted; `bad/governor`), 64 distinct
   keys across `governor.signers` and `cosigners` (accepted), 65 (`bad/governor`), each refusal before any account is
   built, and duplicates across the two lists counted once in the union.
 - **Differential:** the JVM host (through generated clients) and the Node host agree byte for byte on every M4 vector.
-- **Governor artifact resolution** (Y3): a refusal vector for each clause of D4's client rule (a second class with the
-  same simple name in the first entry, missing resource, wrong `type`, wrong `purpose`, `params` arity and type; npm:
-  duplicate and missing `{package, name}`), and a positive where a later class-path entry holds a different class of
-  the same name (the first entry wins).
+- **Governor artifact lookup** (Y3; host only, reduced in r19): the hash-mismatch vector (stale manifest, above) and
+  one ambiguity vector per build system (two artifacts for one Gradle simple name beside the defining class; two npm
+  entries with one `{package, name}`): `bad/governor`. Clients have no artifact vectors: they anchor on the hash
+  (D5).
 - **Capability gating** (Y1, Y2): a new client against an M3 host (the field-gating rows of D7), and `initialize`/
   `describe` of Treasury with and without `params`.
-- **Legacy session (X20, X32, X38, X39, X46), both hosts, differential against the pinned final M3b host** under
-  identical project and chain fixtures: a client offering `[1]` to a host that ships this ADR, on a project with
+- **Legacy session (X20, X32, X38, X39, X46), both hosts, against the final M3b `dev-host-1` kit run unchanged**
+  (r19): a client offering `[1]` to a host that ships this ADR, on a project with
   Treasury **and a servable unparameterized map contract** (its `maps` capability, `assetHistory`, `redeemers` and
   `datum` read kinds, and its `deployment` compared too):
   every `initialize`, `describe` and `deployment` reply validates against the **unmodified** `dev-host-1` result
-  schemas; `fingerprint` and `versions` are checked against the launch; every other field and the capability list
-  (no `params` or `authorizedBy:*`) equal the M3 host's; Treasury is `unsupported:"params"`; and
-  Treasury's `deployment` with `params`, `prepare` with `call.params`, `decode` with `params`, and a `prepare` with
-  a nested `operation.policy`, each get the M3 host's code; a client offering `[1, 2]` to an M3 host gets protocol 1
-  and the same replies.
+  schemas; `fingerprint` and `versions` are checked against the launch; the kit's protocol-1 vectors pass and the
+  capability list has no `params` or `authorizedBy:*`; Treasury is `unsupported:"params"`; and, as plain vectors,
+  Treasury's `deployment` with `params`, `prepare` with `call.params` and `decode` with `params` each get the M3
+  code D1 states; a client offering `[1, 2]` to an M3 host gets protocol 1 and the same replies.
 - **Governor registration** (Y11): mutation vectors refused for a Conway kind-7 registration, a redeemer or witness
   script, collateral and a reference input in a governor registration.
 
@@ -533,9 +555,9 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 
 | Milestone | Scope | Entry | Exit |
 |---|---|---|---|
-| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved; the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b host and its `dev-host-1` schemas pinned as the protocol-1 oracle (X46); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode), F-Y5 (F7 and D4's artifact rule re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session, old-client and capability-gating vectors (D7, D8) pass; the identity vectors pass; I16, I20, I21, I22, I23 |
-| **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts, **including the non-caller key-holder positive** (X26); capability `authorizedBy:key`; I17, I19 |
-| **M4c** | Plutus governors (D4, D5, D6), the client's phase-2 evaluation of governor calls (D5, Q6 (a)), with the engine's `Offline.evaluate` fixed to evaluate the received bytes (D5, X59), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; the reference checker's evaluator and its pinned cost models chosen and recorded with the vectors | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code, **the evaluation vectors included**, the re-encoding vector among them (the evaluator receives the transaction bytes as received, on both client paths); the stale-manifest vectors pass; capability `authorizedBy:script`; I18, I19, I24 |
+| **M4a** | Protocol 2 and its schemas (D1); `@Params` contracts on both hosts (D2, D2a, D3, D4's JVM path for params); the `@Quorum` eligibility count and quorum-kind parity (D5); the processor's params `formats` marker (D2a); application, input-domain and format vectors | this ADR accepted (three reviewers); ADR-0022 M3a and M3b approved, and ADR-0022 r8 merged on this ADR's base (r19); the r5 review's deferred P3s settled at entry: Y5 (raw-Data refusal as new behaviour, stated with its consequence), Y6 (governor params' Data mapping and closed type list), Y7 (a keyed `@Params` fixture contract and a large-param contract for the 15,000/15,001 pair, both needed by this milestone's exit; the final M3b `dev-host-1` kit and schemas pinned as the protocol-1 oracle (X46, r19); and, from r9, owned and keyed `@Quorum` fixture contracts whose object council differs from the parent's), Y8 (Q2/Q4 options and an `outsideProject`-style code for external governors), Y9 (`cosigners` for a key holder who is not the caller, on both paths); and from the Fable final review: F-Y1 (an application vector for an asset-aware script such as Stall, with an oracle for scripts Aiken's binding cannot decode) | application vectors agree across JuLC, Aiken (or the stated oracle) and the kit; the input-domain boundary vectors give the same answer on both hosts; Treasury's non-governed calls served and checked on both hosts, including the quorum-eligibility vectors; the legacy-session and capability-gating vectors (D7, D8) pass; the M4a identity vectors pass (D8); I16, I20, I21, I22, I23 |
+| **M4b** | Key-credential `@AuthorizedBy` (D4, D5 signers) | M4a | key vectors and mutations on both hosts, **including the non-caller key-holder positive** (X26) and the signed-key insert pair (X62); capability `authorizedBy:key`; I17, I19 |
+| **M4c** | Plutus governors (D4, D5, D6), the client's phase-2 evaluation of governor calls (D5, Q6 (a)), with the engine's `Offline.evaluate` fixed to evaluate the received bytes (D5, X59), and the npm build writing or emptying `validators.json` (D4, F21) | M4b; the reference checker's evaluator and its pinned cost models chosen and recorded with the vectors; JuLC confirmed to derive `TxInfo.id` from the bytes it is given (D5); F-Y5 (F7 and the host's artifact lookup re-verified at the JuLC and CCL versions JOUST then pins, recorded with the vectors; moved from M4a in r19) | Treasury + Guardian recorded on a fresh DevKit (registration, `freeze`, payer ≠ owner); every D5/D8 mutation rejected with its code, **the evaluation vectors included**, with the received-bytes seam test on both client paths; the stale, absent and malformed manifest vectors and the governor identity vectors pass; capability `authorizedBy:script`; I18, I19, I24 |
 
 ## 4. Invariants
 
@@ -543,10 +565,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
 |---|---|---|---|
 | I16 | The client's and the host's applications of params produce byte-identical applied scripts and hashes for every application vector | D2, D3, D8 | application vectors (JuLC, Aiken, kit) |
 | I17 | A key-credential call is accepted only if the credential's key, from the client's own params, is a required signer that is the caller or a named co-signer | D4, D5 | M4b vectors |
-| I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, its V3 script in the witness set, and exactly one `Approvals` naming this policy, instance and action at that withdrawal's pointer; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
-| I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner |
+| I18 | A governor call is accepted only with exactly one zero withdrawal from the governor anchored by the client's params, exactly one V3 witness script hashing to it, and an `Approvals` at that withdrawal's pointer containing the approval for this policy, instance and action; every other Rewarding redeemer belongs to an allowed verifier withdrawal that the call's claims require, and decodes as that verifier's claims type | D4, D5 | M4c mutations |
+| I19 | The body's required signers equal exactly D5's signer set | D5 | M4b/M4c mutations, payer ≠ owner, signed-key insert |
 | I20 | Reservations exclude out-refs across all parameterizations in a session; listings, caches and decoded views are keyed by the applied policy; keyed calls of parameterized contracts follow ADR-0022 D11 (r8) unchanged, and restore is ADR-0022 D8's | D2 | identity tests |
-| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), every reply field, the capability list and every error code (per-method precedence included) equal the final M3b host's, and every reply validates against the unmodified `dev-host-1` schemas | D1, D2, D7 | legacy-session (differential) and old-client vectors |
+| I21 | A protocol-1 session with a host that ships this ADR is indistinguishable from one with an M3 host: apart from `fingerprint` and `versions` (checked against the launch), it passes the final M3b `dev-host-1` kit unchanged, its capability list is protocol 1's, its error codes follow M3's per-method precedence, and every reply validates against the unmodified `dev-host-1` schemas | D1, D2, D7 | legacy-session and capability-gating vectors |
 | I22 | Both hosts accept exactly D2a's input domain for `params` and governor params, formats and the raw-Data constructor-index cap included, refusing the rest with the same code and path; neither serves, advertises or describes as served a parameterized contract whose description lacks the `formats` marker | D2, D2a | input-domain boundary and format vectors; mixed marked/unmarked session |
 | I23 | A `@Quorum` call is accepted only if at least `threshold` distinct required signers are in `keys`, both read by the client from its own params or from the input record of the object whose method runs (by call kind; `removed` for `keyedRemove`); both hosts prepare exactly the protocol-2 quorum call kinds | D5 | quorum-eligibility vectors (instance, owned, keyed, removal), through both dispatchers |
 | I24 | A script-governor call is signed or exported only after the client's own phase-2 evaluation of the exact transaction, as received, passes, with inputs resolved through its own node, its node's cost models, and each redeemer's declared units as its budget; other calls keep ADR-0022 D13's structural checks | D5 | M4c evaluation vectors |
@@ -570,7 +592,10 @@ New codes: `bad/params`, `bad/governor`, `refusal/txSize`, `refusal/scriptSize`;
   picker over the snapshot's validators.
 - Clients implement plutus-core Data encoding and UPLC param application (D3); the kit's vectors make it testable.
 - ADR-0022's fingerprint, keyed operation record and `restore` are unchanged (D2, D4): the governor is bound by its
-  applied hash, and keyed retries by their designated input. The npm build always writes `validators.json` (D4, M4c).
+  applied hash, and keyed retries by their designated input. The npm build always writes `validators.json` (D4, M4c),
+  and the npm host reads it outside the fingerprint, an absent or unreadable file affecting governor requests only.
+- Clients need no governor artifact lookup to check a call: they anchor on the credential's hash and evaluate the
+  witness script (D5).
 - Clients count `@Quorum` eligibility from their own reads (D5), for M1b's quorum calls too.
 - Clients that sign or export script-governor calls ship a Plutus V3 evaluator and run it with their own node's
   inputs and cost models (D5, Q6 (a)); clients that never serve governors need none.
@@ -622,159 +647,45 @@ ADR-0022 host serves, so it changes nothing for existing calls.
 ## 9. Revision history
 
 - **r1** (2026-11-21): initial version, after the maintainer chose "ADR amendment first" for ADR-0022 Q7.
-- **r2** (2026-11-21, responds to the Codex review of `65d766d7`):
-  - X1 → D3 (exact encoding, application and hashed bytes, address with `stakeSelf`, size limit), D2 (`params` bytes
-    in `deployment`), F5, F6;
-  - X2 → D4 and D5 (governor witness mandatory, reference-only refused, `txSize`), Q1 decided and moved to Q4;
-  - X3 → D5 (all allowed withdrawals by full reward-account bytes, every pointer checked by purpose), D8, I18;
-  - X4 → D5 (signer set per F9), F9, D8, I17, I19;
-  - X5 → D4 (qualified selector, npm digest includes `validators.json`, V3 withdraw only), F7, F14, D8;
-  - X6 → D2 (session-wide out-ref exclusion, deployment-keyed listings, `policy` in the keyed operation), F15, I20;
-  - X7 → D6 (prerequisites and publish for governors, governor-specific registration, mandatory bound), D5;
-  - X8 → D4 (the JVM path through generated clients and `Authorization`; the HTTP service unchanged), F12, F13;
-  - X9 → D1 (distinct capabilities), D7 (behaviour table, `describe`);
-  - X10 → D8 (zero- and multi-param governors, malformed params, size boundary, the T14 unit test), D9 (entry gates);
-  - X11 → §1 (per-row pins), F1, F7, F10, F11, F13 narrowed or corrected.
-- **r3** (2026-11-21, responds to the Codex round-2 review of `983c33b3`):
-  - X12 → D3 (map normalization per F17, raw Data refused unless normal, size measured on the decoded outer `cborHex`,
-    `refusal/scriptSize`), D8 (15,000 / 15,001 pair, out-of-order and duplicate maps), F17;
-  - X13 → D5 (every Rewarding redeemer decoded against its purpose's type: `Approvals`, `OutputClaims`, `MapClaims`;
-    verifier withdrawal present exactly when claims are), D7 (`verifierRedeemer`), D8, I18, F18;
-  - X14 → D4 (the npm manifest implies V3; the witness language is checked in D5), D8 (before/after `initialize`);
-  - X15 → D2 (restore entries carry `params`; policy checked against `operation.policy` and the body), D8, I20;
-  - X16 → D6 (eligible governors derived from the description and params), D8;
-  - X17 → D4 (fingerprint version 1/2, version 1 serves no script governors), D7, §7, D8, I21;
-  - X18 → D8 (shared verifier as governor end to end; only the self-hash stays a checker-boundary unit test).
-- **r4** (2026-11-21, responds to the Codex round-3 review of `a3d91454`): X19 → D2 (the restore binding applies to
-  parameterized keyed operations only; other entries restore by ADR-0022 D8's path), D8 (positive restarts of a
-  pending governor registration and a pending reference-script publication), I20; the §6 carryover now says
-  fingerprint version 2.
-- **r5** (2026-11-21, responds to the independent design and security review of `85f4c3cc`; design changes
-  requested, security approved):
-  - Y1 → D4 (`fingerprintVersion` npm-only, decided from the installed package's version, capability `fingerprint:2`,
-    fresh process on `bad/request`), D2 (fields sent only after their capability), D7 (new-client rows), §7;
-  - Y2 → D2 (`initialize` reports `parameterized: true` under `params`; `describe` follows each method's code;
-    `deployment.governors` stays empty), D7, I21 restated;
-  - Y3 → D4 (the client's artifact rule for Gradle and npm, with its refusals), D8 (a vector per clause);
-  - Y4 → F5 (JuLC path and tag), F7 (`scriptHash`, `built`), F12 (the params entry points), D4 (the JVM path's
-    reflective codec normalizes maps before `deploy`/`at`), D8 (Aiken binding version);
-  - Y10 → D2 (mirrors, overlays and `mapsStale` keyed by the applied policy; restored entries by the body's policy);
-  - Y11 → D5 (kind-0 registration with no redeemers, scripts, collateral or reference inputs);
-  - Y12 → §2 (the withdraw-zero liveness limit and its recovery);
-  - Y13 → D4 (the client's half of the version-2 binding);
-  - Y5–Y9 left for M4a's entry review (listed in the PR reply).
-- **r6** (2026-11-21, responds to the design and security round-2 review of `289ff3be`, both approved): Y14 →
-  D4 (`fingerprint:2` ships with M4c), D9 (M4c scope), D2 (each gated field names its capability), I21 restated
-  exactly; Y15 → status line, D9 M4a entry lists the deferred Y5–Y9; Y11 → D8 (registration mutation vectors).
-- **r7** (2026-11-22, responds to the Fable final review of `05ea594b`, approved with P3s): F-Y1 → D3 step 2 (opaque
-  builtin tags), D9 M4a entry (asset-aware vector, oracle); F-Y2 → D4 (the client's half is npm-only; `fingerprint:2`
-  informational); F-Y3 → D9 M4a exit (I21 and the gating vectors); F-Y4 → F6, F8 (pins and the re-recording); F-Y5 →
-  D9 M4a entry; F-Y6 → D5 (pointer order defined independently of the wire order); F-Y7 → Q5; F-Y8 → D3 step 1.
-- **r8** (2026-11-22, responds to Codex review of `2ac93789`; its seven findings are numbered X20–X26 here):
-  - X20 (closed M3 schemas) → D1 (everything here is protocol 2, negotiated by the existing protocol list; a
-    protocol-1 session is an M3 session), D2 and D4 (fields and `fingerprintVersion` protocol-2 only), D7, D8
-    (legacy-session vector), I21 restated, §7, F19;
-  - X21 (set equality is not approval) → D5 (`@Quorum` eligibility count, also for M1b's quorum calls; key branch
-    covered by I17; `is_valid` is not evidence), Q6 (client evaluation of governor calls, open, blocks M4c), D7
-    (`quorum`), D8, D9, I23, T17;
-  - X22 (keyed restore without its record) → D2 (structural keyed test, refusal before the batch commits), D7, D8,
-    I20, T18, F20;
-  - X23 (template rebuild) → D2 (`operation.template`; retired operations keep their reservation and can never be
-    retried), D7, D8, I20, T18;
-  - X24 (stale `validators.json`) → D4 (the build writes `[]` and removes stale scripts; version 2 digests
-    `joust.lock.json` and uses only entries the lock lists), D7, D8, D9 M4c, T16, F21;
-  - X25 (two params codecs) → D2a (one input domain checked before either adapter), D4, D7, D8, I22, F22;
-  - X26 (non-caller key holder) → D5, D8 (M4b positive), D9 M4b exit.
-- **r9** (2026-11-22, responds to Codex review of `b24b35db`; its six findings are X27–X32; it confirmed X26 and
-  Q6's gate):
-  - X27 (an honest non-keyed `0x4B` mint blocked restore) → D2 (no refusal: an entry without its record restores by
-    D8's path with its out-refs and keyed tokens held until it settles or expires), D7, D8 (mixed-project vector), I20;
-  - X28 (relabelling took the rebuild path) → D2 (persisted params tried against the other catalog templates first;
-    a retired operation's cost bounded by its validity), D7, D8, I20;
-  - X29 (quorum source for owned and keyed calls) → D5 (keys and threshold by call kind, from the spent object's
-    input record), D8 (owned and keyed vectors, fixture contracts), I23;
-  - X30 (fixed-width params components) → D2a (params integers are arbitrary-precision; `SubsetLint` extended to
-    params records wherever declared), D7, D8 (processor tests, `BigInteger` boundaries), I22;
-  - X31 (lock matched by name only) → D4 (`validatorsDigest` of the manifest bytes, lock written last; older builds
-    serve no script governors), D7, D8;
-  - X32 (`fingerprint:2` and error precedence in protocol 1) → D1 (M3 answers with M3 precedence; no protocol-2
-    capabilities), D4 (`fingerprint:2` in protocol 2 only), D7, D8 (differential legacy vector), I21.
-- **r10** (2026-11-22, responds to Codex review of `e8f8f2b1`; its eight findings are X33–X39
-  here, one of them reopening X30):
-  - X33 (a recordless or retired entry could be discarded, and release was tied to `validTo` alone) → D2 (such
-    entries are possibly handed out: `discarded` refused, end only by final inclusion or expiry beyond `validTo +
-    settlementSlots`), D7, D8, I20;
-  - X34 (catalog names cannot prove a relabelling) → D2 (identity is the applied policy; anything the build cannot
-    re-derive is retired, never refused; the r9 relabel refusal is withdrawn), D7, D8 (legacy alias, same-template
-    names), I20;
-  - X35 (`String` params decoded lossily on the JVM) → D2a (`utf8` format, strict on both hosts), D7, D8;
-  - X36 (`keyedRemove` quorum source and host parity) → D5 (`removed` input; M4a aligns served quorum kinds), D8,
-    I23;
-  - X37 (an interrupted build after `contracts.json`) → D4 (`buildDigests` over `contracts.json` and
-    `validators.json`), D7, D8;
-  - X30 reopened (pre-M4a artifacts) → D2a (the processor writes a `formats` marker and per-component `format`; the
-    r9 compile-time refusal is withdrawn; unmarked descriptions are not served), Risk line, D7, D8, I22;
-  - X38 (protocol-1 precedence differs by method) → D1 (per-method precedence as M3 validates it), D7, D8;
-  - X39 (whole-reply equality impossible across releases) → D1 (`fingerprint` and `versions` checked against the
-    launch, the rest compared), D8, I21.
-- **r11** (2026-11-22, responds to Codex review of `0fd6e440`; its seven findings are X40–X46; it confirmed the
-  removal-quorum source and the three protocol-1 precedence examples):
-  - X40 (a partial attempt history let a restored body be discarded) → D2 (every restored body with keyed tokens is
-    possibly handed out, with or without a record), D7, D8, I20;
-  - X41 (a validator-only rebuild left the old lock valid) → D4 (the build removes the old lock first and writes
-    the new one last), D7, D8;
-  - X42 (policy is not an operation identity; two template rules) → D2 (identity `{designated, policy, method,
-    instance, key}`; one predicate R for restore and retry), D7, D8, I20;
-  - X43 (boxed and other integer types) → D2a (`int32` for `int`/`Integer`, `int64` for `long`/`Long`, at any
-    depth; no marker, with a warning, for anything else), D8;
-  - X44 (marker per contract in `initialize`/`describe`) → D2, D7, D8 (mixed marked/unmarked session), I22;
-  - X45 (quorum kinds) → D5 (the six protocol-2 kinds, both dispatchers; `keyedRetire` excluded as the processor
-    refuses it), D7, D8, I23;
-  - X46 (baseline predates maps) → D1 (the final M3b host is the oracle), D8 (a map contract in the legacy
-    session), I21.
-- **r12** (2026-11-22, responds to Codex review of `107ec9dc`; it confirmed X40, X43, X45 and X46 and Q6's gate; its
-  four findings are X47–X50):
-  - X47 (a protocol-1 record after its contract gains params) → D2 (records without `policy` recognized by shape;
-    retired when not re-derivable, never refused), D8;
-  - X48 (overlapping npm builds) → D4 (builds serialized per output directory by an exclusive marker), D8;
-  - X49 (D7 rows ignored the per-contract marker) → D7 (`initialize` and `describe` rows qualified), D8;
-  - X50 (no governor signer limit) → D4 (64 distinct keys across `governor.signers` and `cosigners`, before any
-    account is built), D8.
-- **r13** (2026-11-22, responds to Codex review of `05a192eb`, which confirmed X49 and X50; its three findings are
-  X51–X53; no Codex review of r13 was run, the round budget being spent):
-  - X51 (version 1 dropped the M3b launch closure) → D4 (version 1 is the final M3b file set and ordering; version 2
-    adds two files to it), F14, D8;
-  - X52 (a renamed legacy record still hit the catalog-name check) → D2 (retirement takes precedence when the name
-    no longer re-derives the policy), D8;
-  - X53 (a crash between marker and lock removal) → D4 (an outstanding `.joust-build` disqualifies script
-    governors on host and client), D8.
-- **r14** (2026-11-22, responds to Codex review of `c47909cf`, which confirmed X51–X53; its two findings are X54–X55):
-  - X54 (a recordless replay of a held body after a rewind failed the merge) → D2 (same body, state and slot without
-    a record keeps the held entry, under the discard guard), D7, D8 (rewind-and-replay vector);
-  - X55 (raw Data constructor indices above 2^63 − 1) → D2a (cap at any depth in the shared prevalidation), D7, D8
-    (differential at 2^63 − 1 and 2^63).
-- **r15** (2026-11-22, responds to Codex review of `fe518c24`, which confirmed X54 and X55; its one finding is X56):
-  - X56 (a recordless attempt blocked restoring its retry) → D2 (a recordless body named in another entry's
-    attempts, with matching `validTo` and designated input, restores as an attempt of that operation; an
-    inconsistent record is retired; both-records identity check unchanged), D7, D8 (both orders), I20.
-- **r16** (2026-11-23, records the maintainer's decision of Q6 and responds to Codex review of `58c67de6`, which
-  confirmed X56 for a genuine retry; its two findings are X57–X58):
-  - **Q6 decided (a)** → header, T17, D5 (the client evaluates phase 2 of script-governor calls with its node's inputs
-    and cost models and the declared budgets; other calls structural, ADR-0022 D13 unchanged apart from that
-    exception), D7 (`evaluation`), D8 (evaluation vectors), D9 (M4c scope, entry and exit), I24, §6, §8;
-  - X57 (a recordless body linked to another deployment) → D2 (the body-to-policy check before a link; retirement
-    on mismatch, the body held independently), D7, D8, I20;
-  - X58 (D7 and I20 omitted the designated-input condition) → D7 (link and retirement rows), D8 (correct deadline,
-    missing designated input), I20.
-- **r17** (2026-11-23, responds to Codex review of `64e114f5`, which found Q6 (a) consistent across the sections;
-  its three findings are X59–X61):
-  - X59 (the npm evaluator re-encodes the body) → D5 (the evaluator receives the bytes as received; the engine's
-    `Offline.evaluate` re-encoding named as an M4c implementation defect; the JVM host's build-time evaluation
-    unaffected), D8 (re-encoding vector), D9 (M4c scope and exit), I24;
-  - X60 (no policy to compare for unparameterized records) → D2 (the policy from D2's catalog-to-body check on the
-    naming entry), D8 (unparameterized A/B, both orders);
-  - X61 (a later replay of a held body's record was refused) → D2 (the record is checked against the body and
-    attached to the existing entry), D7, D8 (a later restore batch), I20.
+*r2–r17 are collapsed to one line each in r19; the full entries are in the PR #157 thread and this file's git
+history. "(withdrawn r18)" marks rules r18 removed.*
+
+- **r2** (2026-11-21, Codex review of `65d766d7`, X1–X11): exact application and hashing (D3), governor witness
+  mandatory, withdrawals by full reward-account bytes, the signer set, governor selection, prerequisites and publish,
+  the JVM path, distinct capabilities, vectors, fact pins.
+- **r3** (2026-11-21, Codex round 2 of `983c33b3`, X12–X18): map normalization and raw-Data refusal, Rewarding
+  redeemers decoded by purpose, V3 manifest, eligible governors, shared-verifier vector; restore `params` and
+  fingerprint versions (withdrawn r18).
+- **r4** (2026-11-21, Codex round 3 of `a3d91454`, X19): keyed restore binding (withdrawn r18); restart vectors.
+- **r5** (2026-11-21, design and security review of `85f4c3cc`, Y1–Y13): capability gating, `initialize`/`describe`
+  under params, the client's artifact rule (reduced to the host in r19), fact corrections, kind-0 registration, the
+  withdraw-zero liveness limit; per-policy `mapsStale` and the version-2 binding (withdrawn r18); Y5–Y9 deferred to
+  M4a's entry.
+- **r6** (2026-11-21, design and security round 2 of `289ff3be`, Y14–Y15): deferred items listed in M4a's entry,
+  registration mutation vectors; `fingerprint:2` timing (withdrawn r18).
+- **r7** (2026-11-22, Fable final review of `05ea594b`, F-Y1–F-Y8): opaque builtin tags, the asset-aware vector,
+  pins and re-recording, pointer order independent of the wire, Q5, integer encoding.
+- **r8** (2026-11-22, Codex review of `2ac93789`, X20–X26): protocol 2 by the existing protocol list, quorum
+  eligibility and Q6 opened, one params input domain (D2a), the non-caller key holder; the npm build writes
+  `validators.json` always; keyed restore and template rules and lock digests (withdrawn r18).
+- **r9** (2026-11-22, Codex review of `b24b35db`, X27–X32): quorum source by call kind, params integer formats,
+  protocol-1 precedence; recordless restore, relabelling and the lock digest (withdrawn r18).
+- **r10** (2026-11-22, Codex review of `e8f8f2b1`, X33–X39, X30 reopened): the `utf8` format, the `keyedRemove`
+  quorum source, the `formats` marker, per-method precedence, launch-checked fields; restore discard rules and build
+  digests (withdrawn r18).
+- **r11** (2026-11-22, Codex review of `0fd6e440`, X40–X46): `int32`/`int64` formats, the per-contract marker, the
+  protocol-2 quorum kinds, the M3b baseline; attempt history, operation identity and lock ordering (withdrawn r18).
+- **r12** (2026-11-22, Codex review of `107ec9dc`, X47–X50): D7's marker rows, the governor signer limit; legacy
+  records and the build marker (withdrawn r18).
+- **r13** (2026-11-22, Codex review of `05a192eb`, X51–X53): the version-1 file set, renamed legacy records and the
+  crash marker (all withdrawn r18).
+- **r14** (2026-11-22, Codex review of `c47909cf`, X54–X55): the raw-Data constructor-index cap; rewind-and-replay
+  (withdrawn r18).
+- **r15** (2026-11-22, Codex review of `fe518c24`, X56): recordless attempts (withdrawn r18).
+- **r16** (2026-11-23, the maintainer decides Q6 (a); Codex review of `58c67de6`, X57–X58): the client's phase-2
+  evaluation of script-governor calls (D5, I24); link and retirement rules (withdrawn r18).
+- **r17** (2026-11-23, Codex review of `64e114f5`, X59–X61): the evaluator receives the bytes as received (X59, kept);
+  record policy rules (withdrawn r18).
 - **r18** (2026-11-24, simplifies r17 `d9513308` under the maintainer's trust model; no review findings): the chain
   provider, the wallet and the client's journal are trusted, as in any CCL or MeshJS application, and only the host
   is not (header, §2). The dev-host stack already applied this model to ADR-0022 (its r8: keyed retries rest on the
@@ -782,7 +693,8 @@ ADR-0022 host serves, so it changes nothing for existing calls.
   keyed-record and restore rules this ADR added on top of the older text are withdrawn:
   - D2: `operation.policy`, `operation.template`, the template predicate R, retired operations, a restore entry's
     `params`, the restored-body discard guard, the recordless link, retirement and attach rules, and the per-policy
-    `mapsStale` scope (X19, X22, X23, X27, X33, X34, X40, X42, X47, X52, X54, X56–X61; Y10) → withdrawn; keyed calls
+    `mapsStale` scope (X19, X22, X23, X27, X33, X34, X40, X42, X47, X52, X54, X56–X58, X60, X61; Y10; r19 removed
+    X59, which r18 listed by mistake: it is kept) → withdrawn; keyed calls
     and `restore` follow ADR-0022 D11 and D8 (r8) unchanged; T18 withdrawn; F20 marked as no longer relied on.
   - D4: fingerprint version 2, `fingerprint:2`, the lock-file digests and the build marker (X17, X24, X31, X37, X41,
     X48, X51, X53, Y13) → withdrawn. The governor is bound by its applied hash (the client's own application must
@@ -794,3 +706,32 @@ ADR-0022 host serves, so it changes nothing for existing calls.
   - Kept unchanged: protocol 2 and the legacy-session guarantee (D1, I21), the params input domain and formats (D2a,
     I22), byte-exact application (D3, I16), the governor checks (D4, D5, I17–I19), quorum eligibility (I23), the
     client's phase-2 evaluation of governor calls (Q6 (a), I24), registration (D6).
+- **r19** (2026-11-24, responds to the reviews of r18 `1f09b191`: Codex (its three findings are X62–X64), Fable
+  (one P2, seven P3s) and Opus (three P2s, six P3s); all three kept r18's hash binding):
+  - X62 (a signed-key keyed insert with no `Ctx` lost its required signer) → D5 signer set, F9 (`KeyedList.java:344`
+    at `4b599e6b`), D8 (`Keys` `Pass.issue` positive and negative), D9 M4b exit, I19;
+  - X63, Opus P3-3, Fable P3-4 (`validators.json` absent or malformed; ADR-0022 I7) → D4 (protocol 1 never reads
+    it; absent is empty; a parse failure fails only `governor` requests; outside the fingerprint, amending I7; restart
+    after a rebuild), header (Amends I7), D7 row, D8 vectors, D9 M4c exit, §6;
+  - X64, Fable P2 (the transaction-id vector is circular) → D8 and D9 M4c (a received-bytes seam test on both client
+    paths; JuLC's `TxInfo.id` derivation moved into M4c's entry, also Opus P3-6); X59 removed from both withdrawal
+    lists (D2, r18 entry);
+  - Opus P2-1 (ADR-0022 r8 is not in this PR's base) → header ("Requires ADR-0022 r8"; fact pin `4b599e6b`), F15
+    re-pinned with D11's rules 3 and 4, D9 M4a entry;
+  - Opus P2-2 (M4a's exit needed M4c features) → D8 identity tests split (governor registration restart and two
+    `Guardian`s to M4c), D9;
+  - Opus P2-3, Fable P3-2 (the client's artifact rule adds no safety) → D4 (the lookup is the host's; one line per
+    build system; mis-resolution surfaces as the hash mismatch), D5 (the client anchors on the credential's hash, one
+    inline V3 witness and evaluation; artifact lookup optional, for display), §2 trust assumption, D7 row, D8 (host
+    mismatch and ambiguity vectors only), D9 (F-Y5 moved to M4c's entry), §6;
+  - Fable P3-3 (a keyed retry naming other params cannot occur: an instance exists under one policy) → D2 keyed
+    bullet, D7 row and D8 vector removed;
+  - Fable P3-5 (deploy-time residual) → T16;
+  - Fable P3-6, Opus P3-1, P3-2, P3-4 (leftovers) → the nested `operation.policy` legacy vector removed; F20
+    withdrawn; F14 and F21 trimmed; T18 reduced to its stub; the stale-manifest vector restated (a Guardian whose code
+    changed); "old-client vectors" renamed (D9, I21); r2–r17 collapsed to one line each;
+  - Opus P3-5 (exactly one approval goes beyond the chain) → D5 (`Approvals` containing the approval; extras inert),
+    T13, I18, D8 (an extra approval is no longer a mutation);
+  - Fable P3-7 (I21's oracle) → D1, D8 legacy session, D9 M4a entry, I21: the final M3b `dev-host-1` kit and schemas
+    run unchanged plus the three precedence examples, instead of a pinned M3b host binary;
+  - Fable P3-8 (D2a's parity machinery) → recorded in D2a as the first cut if M4a proves heavy; no change now.
