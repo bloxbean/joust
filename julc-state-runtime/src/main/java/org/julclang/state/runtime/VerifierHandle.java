@@ -75,6 +75,8 @@ public final class VerifierHandle {
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish and register the JOUST " + label, claimed);
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);
         }

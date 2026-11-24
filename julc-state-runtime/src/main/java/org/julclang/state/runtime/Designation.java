@@ -157,11 +157,13 @@ final class Designation {
         /** Still unspent, as far as the provider shows; an unreadable answer counts as spent (nothing is rebuilt). */
         boolean unspent(StateRuntime rt) {
             try {
-                for (int page = 1; page <= 20; page++) {
+                for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                     if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) return false;
+                    // One output however the listing spells its transaction id (T3, #165 Codex).
+                    String want = ref();
                     for (Utxo u : r.getValue()) {
-                        if (u.getTxHash().equals(utxo.getTxHash()) && u.getOutputIndex() == utxo.getOutputIndex()) return true;
+                        if (Designation.ref(u).equals(want)) return true;
                     }
                     if (r.getValue().size() < 100) return false;
                 }
@@ -190,11 +192,11 @@ final class Designation {
     }
 
     static String ref(Utxo u) {
-        return u.getTxHash() + "#" + u.getOutputIndex();
+        return u.getTxHash().toLowerCase(java.util.Locale.ROOT) + "#" + u.getOutputIndex();
     }
 
     static String ref(TransactionInput in) {
-        return in.getTransactionId() + "#" + in.getIndex();
+        return in.getTransactionId().toLowerCase(java.util.Locale.ROOT) + "#" + in.getIndex();
     }
 
     /** Some keyed operation of this JVM designated {@code ref} (still reserved). */
@@ -305,7 +307,7 @@ final class Designation {
         String address = payer.baseAddress();
         boolean complete = false;
         try {
-            for (int page = 1; page <= 20; page++) {
+            for (int page = 1; page <= StateContractHandle.MAX_PAGES; page++) {   // to the listing's end (#165 Codex r6)
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
                 if (!r.isSuccessful()) {
                     throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref + ": " + r.getResponse());
@@ -338,8 +340,8 @@ final class Designation {
             throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref, e);
         }
         if (!complete) {
-            throw new JoustException("the payer " + address + " has more UTxOs than the 2,000 read; the designated input " + ref
-                    + " was not among them (R-G3)");
+            throw new JoustException("the payer " + address + " has more UTxOs than the " + StateContractHandle.MAX_PAGES
+                    + " pages read; the designated input " + ref + " was not among them (R-G3)");
         }
         throw new JoustException("the designated input " + ref + " is not an unspent UTxO of the payer " + address
                 + " (spent: an earlier attempt of the operation may have landed; ADR-0016 D11)");
@@ -353,14 +355,23 @@ final class Designation {
     static Designated reserve(StateRuntime rt, Account payer, String what, Set<String> avoid) {
         String address = payer.baseAddress();
         purge();
+        boolean[] unanswered = {false};   // the first page failed: said in the refusal (#165 Opus P3, round 7)
         // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
         // between the read and the designation.
         Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
-                for (int page = 1; page <= 20; page++) {
+                for (int page = 1; ; page++) {   // to the listing's end (#165 Codex r6, r7)
                     var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                    if (!r.isSuccessful()) {
+                        if (page == 1) {   // nothing listed, or the provider did not answer (refused below)
+                            unanswered[0] = true;
+                            break;
+                        }
+                        throw new JoustException(what + ": cannot read page " + page + " of the payer's UTxOs at " + address
+                                + ": " + r.getResponse());
+                    }
+                    if (r.getValue() == null || r.getValue().isEmpty()) break;
                     for (Utxo u : r.getValue()) {
                         if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
                                 || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
@@ -370,7 +381,13 @@ final class Designation {
                         candidates.add(u);
                     }
                     if (r.getValue().size() < 100) break;
+                    if (page == StateContractHandle.MAX_PAGES) {
+                        throw new JoustException(what + ": the payer's listing at " + address + " has more than "
+                                + StateContractHandle.MAX_PAGES + " pages; not read to its end");
+                    }
                 }
+            } catch (JoustException e) {
+                throw e;
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
             }
@@ -383,8 +400,9 @@ final class Designation {
             return null;
         });
         if (chosen != null) return chosen;
-        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
-                + " each concurrent keyed operation of a wallet needs its own)");
+        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate"
+                + (unanswered[0] ? " (or the provider did not answer its listing)" : "")
+                + " (ADR-0016 D7: each concurrent keyed operation of a wallet needs its own)");
     }
 
     /**

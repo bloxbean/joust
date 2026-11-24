@@ -511,3 +511,12 @@ test('PR #62 C5, F10, S8: a cooldown over HTTP (joust dev\'s prepare route) keep
   assert.deepEqual(prepareErrorBody(new Error('prepare again at slot 7')), { error: 'prepare again at slot 7' });
   assert.deepEqual(prepareErrorBody(Object.assign(new Error('x'), { retryAtSlot: '7' })), { error: 'x' });
 });
+
+test('#165 Opus P3: with no UTxO to designate, the refusal names the funding address and what to do', async () => {
+  const { state, page, call, address } = rig();
+  state.spent = new Set([ref('a0'), ref('a1')]);
+  state.extra.set(ref('a9'), { address, value: new Map([['lovelace', 2n * ADA]]) });
+  await assert.rejects(call(page()), (e) => e.message.includes(`at ${address} or another address with its payment key; move ADA there`)
+    || assert.fail(e.message));
+  assert.equal(state.prepared.length, 0, 'nothing prepared');
+});

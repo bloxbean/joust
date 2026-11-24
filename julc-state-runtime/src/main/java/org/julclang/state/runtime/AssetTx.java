@@ -272,66 +272,243 @@ final class AssetTx {
 
     /**
      * Spends caller UTxOs (from its base address) that hold {@code needed}'s native assets. QuickTx balances only
-     * lovelace from the fee payer, so the assets a caller pays in must be collected explicitly; the leftovers return as
-     * change. Throws if the caller does not hold them.
+     * lovelace from the fee payer, so the assets a caller pays in must be collected explicitly, by key accounts and
+     * wallets alike: with a script input fixed, QuickTx builds the change from the fixed inputs and its fee selection
+     * asks only for lovelace, so an uncollected token payment ends as a negative quantity in the change (#152). The
+     * leftovers return as change: the payer's; in a composition whose caller is not the payer, to the caller's own
+     * address ({@link #returnSurplus}, T1). Throws if the caller does not hold them.
+     * <p>
+     * Never collects a UTxO twice (ADR-0015 §13.8, #152): what the transaction already spends at the caller's address
+     * (the creation's {@code alreadyIn} seed; in a composition, another call's seed, a designated input, or what an
+     * earlier call collected) counts first, less what earlier calls took from it.
+     * <p>
+     * Selection: never a UTxO with a reference script (spending it would consume a deployment's script; T2) or a datum
+     * hash (a conservative choice, as cardano-client-lib's selection makes: at a key address the ledger needs no datum,
+     * but whatever the hash commits to may matter to someone; F-W5); an inline datum at a key address is fine (R9). Nor
+     * one another keyed operation designates or holds ({@link Designation#pickable}; R2), nor a reference input of the
+     * transaction (this call's reads, applied before it; in a composition every call's, from the first pass; #165 Codex
+     * round 8). Like every plain transaction's selection (Designation), it does not skip inputs an earlier,
+     * still-unexpired prepared transaction of this JVM claims (T4): the lovelace selection of the same body would reuse
+     * them anyway; two such bodies conflict and at most one lands, so nothing is lost, and a page prepares again after
+     * the first settles.
      */
     static void collectAssets(Tx tx, StateContractHandle<?> contract, Account caller, Value needed, String what,
                               Utxo alreadyIn) {
         var want = Assets.read(Assets.withoutLovelace(needed));
         if (want.isEmpty()) return;
-        // A wallet's unsigned build (Compose.prepare; ADR-0013, ADR-0015) balances native assets itself: there a
-        // collected regular input counts twice when the balancing also selects it (cardano-client-lib 0.8.0-pre7, Tx),
-        // while the signing build needs them collected. Both observed on DevKit (ADR-0015 §13.8).
-        if (caller instanceof WalletAccount) return;
-        // The seed of a creation is already an input: count what it holds, never collect it twice.
-        if (alreadyIn != null) {
-            for (Amount a : alreadyIn.getAmount()) {
-                String unit = (a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit()).toLowerCase();
-                String p = unit.length() > 56 ? unit.substring(0, 56) : unit;
-                var ts = want.get(p);
-                if (ts != null && unit.length() >= 56) {
-                    String n = unit.substring(56);
-                    if (ts.containsKey(n)) {
-                        BigInteger left = ts.get(n).subtract(a.getQuantity());
-                        if (left.signum() <= 0) ts.remove(n); else ts.put(n, left);
-                        if (ts.isEmpty()) want.remove(p);
-                    }
-                }
-            }
-            if (want.isEmpty()) return;
-        }
         var missing = new java.util.HashMap<String, BigInteger>();
         want.forEach((p, ts) -> ts.forEach((n, q) -> missing.put(p + n, q)));
+        TxRunner.Capture cap = TxRunner.capture();
+        // What the transaction's inputs at the caller's address hold beyond what earlier calls took, by unit; and the
+        // inputs counted in it (by lower-case reference: a provider may spell a transaction id in either case; T3).
+        // Per composition (its capture), else per call.
+        var spare = cap == null ? new java.util.HashMap<String, BigInteger>()
+                : cap.spareAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());
+        var counted = cap == null ? new java.util.HashSet<String>() : cap.countedInputs;
+        if (alreadyIn != null && counted.add(key(alreadyIn))) addAssets(spare, alreadyIn);
+        // #165 reviewer3 R3-2: inputs earlier calls of this composition already spend from the caller's address (a
+        // seed, a designated input) count before any page is read, whatever their place in the listing and even when
+        // they carry a datum hash (the transaction spends them anyway): no token UTxO is pulled in for what they hold.
+        if (cap != null) {
+            for (var e : cap.regularInputs.entrySet()) {
+                if (caller.baseAddress().equals(cap.regularOwners.get(e.getKey())) && counted.add(key(e.getValue()))) {
+                    addAssets(spare, e.getValue());
+                }
+            }
+        }
+        draw(missing, spare);
+        // Never a reference input of the transaction (#165 Codex round 8: BabbageNonDisjointRefInputs): what this call
+        // reads (its reads are applied first), what earlier calls of a composition read, and what any of its calls read
+        // in the first pass.
+        var read = new java.util.HashSet<String>();
+        if (tx instanceof TxRunner.RecordingTx r) read.addAll(r.readRefs);
+        if (cap != null) {
+            if (cap.tx instanceof TxRunner.RecordingTx r) read.addAll(r.readRefs);
+            read.addAll(cap.knownReads);
+        }
         var picked = new ArrayList<Utxo>();
+        int passedOver = 0;
+        boolean unanswered = false;
         try {
-            for (int page = 1; page < 20 && !missing.isEmpty(); page++) {
+            // Every page until the payment is covered or the listing ends (#165 Codex round 5); a page the provider
+            // fails to answer is an error, not the end.
+            for (int page = 1; !missing.isEmpty(); page++) {
+                if (page > StateContractHandle.MAX_PAGES) {
+                    throw new JoustException(what + ": the caller's listing has more than " + StateContractHandle.MAX_PAGES + " pages");
+                }
                 var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                if (!r.isSuccessful()) {
+                    if (page == 1) {   // as before: nothing listed (RequireException below), or the provider did not answer
+                        unanswered = true;
+                        break;
+                    }
+                    throw new JoustException(what + ": cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) break;
                 for (Utxo u : r.getValue()) {
-                    if (alreadyIn != null && u.getTxHash().equals(alreadyIn.getTxHash())
-                            && u.getOutputIndex() == alreadyIn.getOutputIndex()) continue;
-                    boolean useful = false;
-                    for (Amount a : u.getAmount()) {
-                        String unit = a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit();
-                        BigInteger need = missing.get(unit.toLowerCase());
-                        if (need != null) {
-                            useful = true;
-                            BigInteger left = need.subtract(a.getQuantity());
-                            if (left.signum() <= 0) missing.remove(unit.toLowerCase());
-                            else missing.put(unit.toLowerCase(), left);
+                    if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
+                    String ref = Designation.ref(u);
+                    boolean spent = cap != null && cap.inputs.contains(ref);
+                    // An inline datum at a key address is spendable as is (R9): tokens a contract sends a wallet with one
+                    // can be paid in. Not a datum hash (conservative, as cardano-client-lib; F-W5), nor a reference
+                    // script (it would be consumed). A provider may give an inline datum's hash too (Yaci Store does):
+                    // only a hash without the inline datum is a datum hash (#165 Codex).
+                    // Spent already (R3-2): it counts whatever it carries, since the transaction spends it anyway.
+                    if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null && u.getInlineDatum() == null
+                            || read.contains(ref) || !Designation.pickable(u, TxRunner.currentOperation()))) {
+                        passedOver++;
+                        continue;
+                    }
+                    counted.add(key(u));
+                    addAssets(spare, u);
+                    // Spent already (another call's seed, a designated input): counted, not collected again.
+                    if (!spent) {
+                        picked.add(u);
+                        if (cap != null) {
+                            cap.inputs.add(ref);
+                            cap.assetInputs.add(ref);
+                            cap.regularInputs.putIfAbsent(ref, u);
+                            cap.regularOwners.put(ref, caller.baseAddress());   // listed there (R7)
                         }
                     }
-                    if (useful) picked.add(u);
+                    draw(missing, spare);
                     if (missing.isEmpty()) break;
                 }
             }
+        } catch (JoustException e) {
+            throw e;
         } catch (Exception e) {
             throw new JoustException(what + ": cannot read the caller's UTxOs", e);
         }
         if (!missing.isEmpty()) {
-            throw new RequireException(what + ": the caller's base address does not hold " + missing);
+            throw new RequireException(what + ": the caller's base address does not hold " + missing
+                    + (unanswered ? " (or the provider did not answer its listing)" : "")
+                    + (passedOver == 0 ? "" : " in UTxOs it may spend (" + passedOver + " holding it carry a reference"
+                    + " script or a datum hash, are held by a keyed operation, or are the transaction's reference inputs)"));
         }
-        tx.collectFrom(picked);
+        if (cap != null) {
+            var paid = cap.paidAssets.computeIfAbsent(caller.baseAddress(), k -> new java.util.HashMap<>());
+            want.forEach((p, ts) -> ts.forEach((n, q) -> paid.merge(p + n, q, BigInteger::add)));
+        }
+        if (!picked.isEmpty()) tx.collectFrom(picked);
+    }
+
+    /** A canonical value as a cardano-client-lib output value. */
+    static com.bloxbean.cardano.client.transaction.spec.Value specValue(Value v) {
+        var multi = new ArrayList<com.bloxbean.cardano.client.transaction.spec.MultiAsset>();
+        Assets.read(v).forEach((p, ts) -> {
+            if (p.isEmpty()) return;
+            var assets = new ArrayList<Asset>();
+            ts.forEach((n, q) -> assets.add(new Asset("0x" + n, q)));
+            multi.add(com.bloxbean.cardano.client.transaction.spec.MultiAsset.builder().policyId(p).assets(assets).build());
+        });
+        return com.bloxbean.cardano.client.transaction.spec.Value.builder().coin(Assets.lovelaceOf(v)).multiAssets(multi).build();
+    }
+
+    private static String key(Utxo u) {
+        return Designation.ref(u);   // lower case (T3, R3-2)
+    }
+
+    /**
+     * Returns to each caller other than the payer what the composition's inputs at its address hold beyond the native
+     * assets its calls pay in (T1): one output to that address, appended after the calls' outputs, holding those
+     * inputs' lovelace and their other assets. Without it QuickTx would make it the payer's change (the payer is the
+     * change address). The payer funds the calls' lovelace and the fee, as for any composition (ADR-0011, ADR-0013).
+     * Refuses when that output would hold less than its ledger minimum, or a value above the ledger's maximum value
+     * size. Returns what each such caller pays in, by its
+     * address, for the prepared transaction's check ({@code TxRunner.checkCoCallers}).
+     */
+    static Map<String, Value> returnSurplus(org.julclang.state.runtime.StateRuntime rt, TxRunner.Capture cap, String payer) {
+        var held = new LinkedHashMap<String, Value>();
+        for (var e : cap.regularInputs.entrySet()) {
+            String owner = cap.regularOwners.get(e.getKey());
+            if (owner == null) {
+                // Fail closed (R7): its surplus would go to the payer's change unnoticed.
+                throw new JoustException("composition: cannot tell whose input " + e.getKey() + " is (the provider gave no"
+                        + " address); refused");
+            }
+            if (owner.equals(payer)) continue;
+            held.merge(owner, valueOf(e.getValue()), Assets::add);
+        }
+        // What every caller other than the payer pays in, whether or not an input is attributed to it (#165 Codex round
+        // 4): one with none is still held to its payment (TxRunner.checkCoCallers).
+        var paid = new LinkedHashMap<String, Value>();
+        for (var p : cap.paidAssets.entrySet()) {
+            if (p.getKey().equals(payer)) continue;
+            Value in = Assets.none();
+            for (var u : p.getValue().entrySet()) {
+                in = Assets.add(in, Assets.of(HEX.parseHex(u.getKey().substring(0, 56)), HEX.parseHex(u.getKey().substring(56)), u.getValue()));
+            }
+            paid.put(p.getKey(), in);
+        }
+        if (held.isEmpty()) return paid;
+        com.bloxbean.cardano.client.api.model.ProtocolParams pp = null;
+        for (var e : held.entrySet()) {
+            Value in = paid.getOrDefault(e.getKey(), Assets.none());
+            paid.put(e.getKey(), in);
+            Value back = Assets.subtract(e.getValue(), in);
+            var amounts = new ArrayList<Amount>();
+            Assets.read(back).forEach((p, ts) -> ts.forEach((n, q) -> {
+                if (q.signum() < 0) {
+                    throw new JoustException("composition: " + e.getKey() + " pays in more " + p + n + " than its inputs hold");
+                }
+                if (q.signum() > 0) amounts.add(p.isEmpty() ? Amount.lovelace(q) : new Amount(p + n, q));
+            }));
+            if (amounts.isEmpty()) continue;
+            if (pp == null) pp = TxRunner.protocolParams(rt, "composition");
+            var out = TransactionOutput.builder().address(e.getKey()).value(specValue(back)).build();
+            BigInteger min = new MinAdaCalculator(pp).calculateMinAda(out);
+            if (Assets.lovelaceOf(back).compareTo(min) < 0) {
+                throw new JoustException("composition: what " + e.getKey() + "'s inputs hold beyond its payment ("
+                        + Assets.read(back) + ") is below the ledger minimum of an output (" + min + " lovelace) and cannot"
+                        + " go back to it; compose with it as the payer, or pay from a UTxO with more ADA (T1)");
+            }
+            // One output holds what several inputs held: it may exceed the ledger's maximum value size (#165 Codex).
+            // Refused rather than split: a split changes the outputs a page sees and needs min ADA for each.
+            int size = out.getValue().getMultiAssets() == null || out.getValue().getMultiAssets().isEmpty() ? 0
+                    : BodyBalance.valueSize(out.getValue(), "composition");
+            int max = size == 0 ? 0 : BodyBalance.maxValueSize(pp, "composition");
+            if (size > max) {
+                throw new JoustException("composition: what " + e.getKey() + "'s inputs hold beyond its payment needs a "
+                        + size + "-byte value, above the ledger's maximum of " + pp.getMaxValSize() + " bytes, and cannot"
+                        + " go back to it in one output; compose with it as the payer, or pay from fewer UTxOs (T1)");
+            }
+            // Checked by its place and value in the built body (TxRunner.checkCoCallers): its place in the outputs the
+            // calls actually added (#165 Codex round 4: a cancellation's refund is not counted in cap.outputs).
+            int index = cap.tx instanceof TxRunner.RecordingTx r ? r.outputs : cap.outputs;
+            cap.tx.payToAddress(e.getKey(), amounts);
+            cap.returns.put(e.getKey(), new TxRunner.Return(index, back));
+            cap.outputs++;   // counted on its own (#165 Codex r6): Compose compares the two counts before and after
+        }
+        return paid;
+    }
+
+    private static String unitOf(Amount a) {
+        return (a.getUnit().startsWith("0x") ? a.getUnit().substring(2) : a.getUnit()).toLowerCase();
+    }
+
+    private static boolean holdsAny(Utxo u, Map<String, BigInteger> missing) {
+        for (Amount a : u.getAmount()) if (missing.containsKey(unitOf(a))) return true;
+        return false;
+    }
+
+    private static void addAssets(Map<String, BigInteger> spare, Utxo u) {
+        for (Amount a : u.getAmount()) {
+            if (!a.getUnit().equals("lovelace")) spare.merge(unitOf(a), a.getQuantity(), BigInteger::add);
+        }
+    }
+
+    /** Takes what {@code spare} holds of each missing unit. */
+    private static void draw(Map<String, BigInteger> missing, Map<String, BigInteger> spare) {
+        for (var it = missing.entrySet().iterator(); it.hasNext(); ) {
+            var e = it.next();
+            BigInteger have = spare.getOrDefault(e.getKey(), BigInteger.ZERO);
+            if (have.signum() <= 0) continue;
+            BigInteger take = have.min(e.getValue());
+            spare.put(e.getKey(), have.subtract(take));
+            if (take.equals(e.getValue())) it.remove();
+            else e.setValue(e.getValue().subtract(take));
+        }
     }
 
     /** Reserved token kinds (ADR-0007 D3): instance, object, intent. */

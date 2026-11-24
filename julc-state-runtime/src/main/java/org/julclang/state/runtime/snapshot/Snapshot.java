@@ -49,8 +49,9 @@ public final class Snapshot {
     public final Set<String> absent = new LinkedHashSet<>();
     public final Map<String, Script> scripts = new LinkedHashMap<>();
 
+    /** An output reference, its transaction id in lower case (#165 Codex): one key however a provider spells it. */
     public static String ref(String txHash, int index) {
-        return txHash + "#" + index;
+        return txHash.toLowerCase(java.util.Locale.ROOT) + "#" + index;
     }
 
     /** The output {@code txHash#index} from any set or lookup this snapshot holds (an output never changes), or null. */
@@ -59,7 +60,7 @@ public final class Snapshot {
         if (u != null) return u;
         for (List<List<Utxo>> sets : List.of(List.copyOf(utxos.values()), List.copyOf(assetUtxos.values()))) {
             for (List<Utxo> set : sets) {
-                for (Utxo x : set) if (x.getTxHash().equals(txHash) && x.getOutputIndex() == index) return x;
+                for (Utxo x : set) if (x.getTxHash().equalsIgnoreCase(txHash) && x.getOutputIndex() == index) return x;
             }
         }
         return null;
@@ -74,7 +75,7 @@ public final class Snapshot {
             n.path("utxos").fields().forEachRemaining(e -> s.utxos.put(e.getKey(), utxoList(e.getValue())));
             n.path("assetUtxos").fields().forEachRemaining(e -> s.assetUtxos.put(e.getKey(), utxoList(e.getValue())));
             for (Utxo u : utxoList(n.path("outputs"))) s.outputs.put(ref(u.getTxHash(), u.getOutputIndex()), u);
-            for (JsonNode a : n.path("absent")) s.absent.add(a.asText());
+            for (JsonNode a : n.path("absent")) s.absent.add(a.asText().toLowerCase(java.util.Locale.ROOT));
             n.path("scripts").fields().forEachRemaining(e -> s.scripts.put(e.getKey(), new Script(
                     e.getValue().path("type").asText(null), e.getValue().path("cborHex").asText(null), e.getValue().path("cbor").asText(null))));
             return s;

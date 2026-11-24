@@ -147,6 +147,8 @@ public final class IntentHandle<S> {
         TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE.negate())),
                 PlutusDataAdapter.convert(codec.burn()));
         tx.payToAddress(owner.enterpriseAddress(), Amount.lovelace(lovelace));
+        // Counted as a call's output (#165 Codex round 4): later calls' send and return indices follow it.
+        if (TxRunner.capture() != null) TxRunner.capture().outputs++;
         return new TxRunner(contract.runtime).submit(tx, owner, null, new byte[][]{ownerPkh}, null, List.of(),
                 new PlutusScript[]{contract.script}, what);
     }

@@ -15,6 +15,7 @@ import { parseTx, pageOutputSize } from './ledger.js';
 import { decodeData, dataHex, canonicalHex } from './pdata.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
+  scriptBearingChecks,
 } from './verify.js';
 
 /** The keyed call kinds of a description's x-joust (ADR-0016 D11). */
@@ -134,7 +135,9 @@ const TIME_HIGH = 1n << 64n;
  * wallet may sign it. Options as for verifyPrepared, plus:
  *
  * @param o.call.key         the target's key (hex): keyed actions, removals, retires
- * @param o.call.designated  the operation's designated wallet input ("txhash#index"): every attempt must spend it
+ * @param o.call.designated  the operation's designated wallet input ("txhash#index"): every attempt must spend it, and the
+ *                           call's caller is the payment key of its address (as the wallet reports it)
+ * @param o.call.designatedAddress  the address the page recorded for it (retries.js), when known: must be the wallet's
  * @param o.chain.verifiedOutput  ref => { address, value, inlineDatum, ... } read from the producing transaction (hash-
  *                           checked), or null; without it, script inputs are bound by Ctx or the balance equation
  */
@@ -160,6 +163,7 @@ export async function verifyKeyed(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  scriptBearingChecks(tx, wallet, problems);
   if (!isKeyedCall(description, call)) problems.push(`${call.kind} is not a keyed call`);
   let kt = null;
   if (!creation) {
@@ -207,6 +211,14 @@ export async function verifyKeyed(o) {
   if (!call.designated) problems.push('a keyed call needs its operation\'s designated wallet input (ADR-0016 D11)');
   else if (!wallet.utxos.has(call.designated)) problems.push(`the designated input ${call.designated} is not the wallet's`);
   else if (!tx.inputs.includes(call.designated)) problems.push(`the transaction does not spend the operation's designated input ${call.designated}`);
+  // The caller is the designated input's payment key (#165 Codex round 8): the engine builds from that address, so a
+  // creation's admin and later calls funded from it see one key, not just any key of the wallet.
+  const designatedAt = call.designated ? wallet.utxos.get(call.designated)?.address ?? null : null;
+  if (designatedAt && call.designatedAddress && call.designatedAddress !== designatedAt) {
+    problems.push(`the designated input ${call.designated} is at ${designatedAt}, not at the recorded ${call.designatedAddress}`);
+  }
+  const callerKey = designatedAt ? paymentKeyHashOf(designatedAt) : null;
+  if (designatedAt && !callerKey) problems.push(`the designated input ${call.designated} is not at a payment-key address`);
 
   // ---- inputs: the wallet's, and the list's (each authenticated or bound, I51 checked)
   const sorted = ledgerOrder(tx.inputs);
@@ -316,6 +328,9 @@ export async function verifyKeyed(o) {
       } else if (f.title === 'ctx') {
         ctx = decoded.ctx;
         if (!wallet.keyHashes.includes(ctx.caller)) problems.push('the call\'s caller is not this wallet');
+        else if (callerKey && ctx.caller !== callerKey) {
+          problems.push(`the call's caller ${ctx.caller} is not the payment key of the designated input's address (${callerKey})`);
+        }
         // D11: an insert or a creation binds no existing input: its Ctx balance is 0 (R-F4).
         if ((kind === 'keyedInit' || creation) && ctx.balance !== 0n) problems.push(`the call's Ctx balance is ${ctx.balance}, not 0`);
         if (ctx.received !== pay) problems.push(`the call receives ${ctx.received} lovelace, not the ${pay} the page pays`);

@@ -278,6 +278,8 @@ public final class StateContractHandle<S> {
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
@@ -496,25 +498,55 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedFrom(caller));
     }
 
-    private Utxo seedOf(Account caller) {
+    /** A bound on the pages of one listing read: a provider that never ends is refused, not followed forever. */
+    static final int MAX_PAGES = 10_000;
+
+    private Utxo seedFrom(Account caller) {
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);
-            if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {
-                throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
-            }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
             var own = TxRunner.currentOperation();
             // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
             if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
-            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
-            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
-            return free.stream()
-                    .filter(u -> u.getAmount().size() == 1)
-                    .findFirst()
-                    .orElse(free.get(0));
+            var cap = TxRunner.capture();
+            Utxo first = null;
+            boolean any = false;
+            boolean unanswered = false;
+            // Every page until a pure-ADA seed or the listing's end (#165 Codex rounds 4, 5): the first ones may all be
+            // excluded. A page the provider fails to answer is an error, not the end.
+            for (int page = 1; page <= MAX_PAGES; page++) {
+                var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, page);
+                if (!r.isSuccessful()) {
+                    // As before: no UTxO to use (some providers answer an empty address so), or the provider did not answer.
+                    if (page == 1) {
+                        unanswered = true;
+                        break;
+                    }
+                    throw new JoustException("deploy: cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) break;
+                any = true;
+                for (Utxo u : r.getValue()) {
+                    // Never one carrying a reference script (#165 Codex round 3): spending it would consume a script.
+                    if (u.getReferenceScriptHash() != null || !Designation.pickable(u, own)) continue;
+                    // Not an input the composition spends already (an earlier call's asset input; R2).
+                    if (cap != null && cap.inputs.contains(Designation.ref(u))) continue;
+                    if (u.getAmount().size() == 1) return u;
+                    if (first == null) first = u;
+                }
+                if (r.getValue().size() < 50) break;
+                if (page == MAX_PAGES) throw new JoustException("deploy: the caller's listing has more than " + MAX_PAGES + " pages");
+            }
+            if (!any) throw new JoustException("deploy: the caller's address has no UTxO to use as seed"
+                    + (unanswered ? " (or the provider did not answer its listing)" : ""));
+            // F-W3: a creation after a call that paid assets from the caller's only UTxO finds none; in the other order
+            // the seed is counted for the payment (alreadyIn). Refused with the remedy rather than reusing the input.
+            if (first == null) throw new JoustException("deploy: every UTxO of the caller carries a reference script, is"
+                    + " designated by a keyed operation or spent by the composition; put the creation before a call that pays"
+                    + " assets from the same wallet, or give the wallet another UTxO");
+            return first;
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {
