@@ -24,7 +24,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { gradleBuildRoot, isGradle, isNpmRoot, trusted } from '../project.js';
+import { SETTINGS_FILES, gradleBuildRoot, isGradle, isNpmRoot, trusted } from '../project.js';
 import { launchHost } from './host.js';
 import { manifestOf, readJar } from './jar.js';
 
@@ -80,10 +80,15 @@ export function windowsCommandProblem(path) {
 export function gradleBuild(root, { env = process.env, isTrusted = settingsTrusted, platform = process.platform } = {}) {
   const project = realpathSync(root);
   const buildRoot = gradleBuildRoot(project, env, isTrusted);
+  // The root itself must be trusted too: the walk falls back to the project it started in, trusted or not.
+  if (!isTrusted(buildRoot, env)) {
+    fail(`${buildRoot} is writable by others (or not yours): its build files could be replaced; run chmod go-w on it,`
+      + ' or list it in JOUST_SAFE_DIRS');
+  }
   // Gradle searches upwards for a settings file itself: without one in this trusted root it would evaluate an
   // ancestor's (perhaps another user's). So the build must have its own, and it must be the one Gradle takes:
-  // settings.gradle before settings.gradle.kts, and Gradle follows links, so a link (or both files) is refused.
-  const candidates = ['settings.gradle', 'settings.gradle.kts'].map((f) => {
+  // Gradle follows links, so a link (or more than one candidate) is refused.
+  const candidates = SETTINGS_FILES.map((f) => {
     try {
       return { f, st: lstatSync(join(buildRoot, f)) };
     } catch {
@@ -94,7 +99,7 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
     fail(`no settings.gradle at or above ${project} in a directory you own (or list in JOUST_SAFE_DIRS): Gradle would look`
       + ' further up for one itself; add a settings.gradle to the build');
   }
-  if (candidates.length > 1) fail(`${buildRoot} has both settings.gradle and settings.gradle.kts: keep one`);
+  if (candidates.length > 1) fail(`${buildRoot} has ${candidates.map((c) => c.f).join(' and ')}: keep one`);
   if (!candidates[0].st.isFile() || candidates[0].st.isSymbolicLink()) {
     fail(`${join(buildRoot, candidates[0].f)} is not a regular file (a link, say): Gradle would evaluate whatever it points to`);
   }
@@ -114,7 +119,8 @@ export function gradleBuild(root, { env = process.env, isTrusted = settingsTrust
 
 /**
  * A directory the build-root walk may enter: trusted (this user's, or listed in JOUST_SAFE_DIRS) and, unless listed,
- * not writable by others (unless sticky): another account could otherwise put a settings file there.
+ * not writable by others: another account could otherwise put a settings file there (a sticky bit does not stop a new
+ * file being created).
  */
 export function settingsTrusted(dir, env = process.env) {
   if (!trusted(dir, env)) return false;
@@ -122,7 +128,7 @@ export function settingsTrusted(dir, env = process.env) {
   if (safe.includes(resolve(dir))) return true;
   try {
     const mode = statSync(dir).mode;
-    return process.platform === 'win32' || (mode & 0o022) === 0 || (mode & 0o1000) !== 0;
+    return process.platform === 'win32' || (mode & 0o022) === 0;
   } catch {
     return false;
   }

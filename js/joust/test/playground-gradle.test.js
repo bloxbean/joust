@@ -380,11 +380,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
   test('the settings file checked is the one Gradle takes: one of the two, a regular file, in a root others cannot write', () => {
     const p = project();
     writeFileSync(join(p.root, 'settings.gradle.kts'), '');
-    assert.throws(() => gradleBuild(p.root), /has both settings\.gradle and settings\.gradle\.kts: keep one/);
+    assert.throws(() => gradleBuild(p.root), /has settings\.gradle and settings\.gradle\.kts: keep one/);
     // A linked settings.gradle beside a regular settings.gradle.kts: still both (Gradle takes the link first).
     rmSync(join(p.root, 'settings.gradle'));
     symlinkSync(join(p.root, 'build.gradle'), join(p.root, 'settings.gradle'));
-    assert.throws(() => gradleBuild(p.root), /has both/);
+    assert.throws(() => gradleBuild(p.root), /has settings\.gradle and settings\.gradle\.kts: keep one/);
     rmSync(join(p.root, 'settings.gradle.kts'));
     assert.throws(() => gradleBuild(p.root), /settings\.gradle is not a regular file \(a link, say\)/);
     rmSync(join(p.root, 'settings.gradle'));
@@ -401,6 +401,69 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     } finally {
       chmodSync(p.root, 0o700);
     }
+  });
+
+  test('the build root itself must be trusted: a project others can write is refused unless listed; sticky is not enough', () => {
+    const p = project();
+    chmodSync(p.root, 0o775);
+    try {
+      assert.throws(() => gradleBuild(p.root), /is writable by others \(or not yours\): its build files could be replaced; run chmod go-w on it, or list it in JOUST_SAFE_DIRS/);
+      assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
+      // A sticky shared ancestor still lets another account create a settings file there: not walked into either.
+      const sub = join(p.root, 'app');
+      mkdirSync(sub);
+      chmodSync(sub, 0o755);
+      writeFileSync(join(sub, 'build.gradle'), '');
+      chmodSync(p.root, 0o1777);
+      assert.throws(() => gradleBuild(sub), /no settings\.gradle at or above/);
+      assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
+    } finally {
+      chmodSync(p.root, 0o700);
+    }
+  });
+
+  test('settings.gradle.dcl counts: the nearer directory holding one is the root, one candidate only, no link', () => {
+    const p = project();
+    const sub = join(p.root, 'app');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'build.gradle'), '');
+    writeFileSync(join(sub, 'gradlew'), '#!/bin/sh\n');
+    chmodSync(join(sub, 'gradlew'), 0o755);
+    writeFileSync(join(sub, 'settings.gradle.dcl'), '');
+    assert.equal(gradleBuild(sub).buildRoot, sub, 'Gradle would take the nearer DCL settings: so is it checked');
+    writeFileSync(join(sub, 'settings.gradle.kts'), '');
+    assert.throws(() => gradleBuild(sub), /has settings\.gradle\.kts and settings\.gradle\.dcl: keep one/);
+    rmSync(join(sub, 'settings.gradle.kts'));
+    rmSync(join(sub, 'settings.gradle.dcl'));
+    symlinkSync(join(p.root, 'settings.gradle'), join(sub, 'settings.gradle.dcl'));
+    assert.throws(() => gradleBuild(sub), /settings\.gradle\.dcl is not a regular file \(a link, say\)/);
+  });
+
+  test('a browser opener that exits non-zero (xdg-open without a browser) prints one fresh pairing link, unless paired', async () => {
+    const { announce } = await import('../src/playground/index.js');
+    const run = async ({ pairFirst = false, events = [['exit', 1, null]] } = {}) => {
+      const lines = [];
+      let onPaired;
+      let codes = 0;
+      const server = { port: 1, pairingUrl: () => `http://127.0.0.1:1/#pair=${String(++codes).padStart(32, 'a')}`, close: async () => {} };
+      const opener = () => {
+        const child = new EventEmitter();
+        child.unref = () => child;
+        setImmediate(() => { if (pairFirst) onPaired(); for (const [e, ...a] of events) child.emit(e, ...a); });
+        return child;
+      };
+      const s = await announce(async (o) => { onPaired = o.onPaired; return server; }, { open: true, log: (l) => lines.push(l), mode: 'test', spawnOpener: opener });
+      await new Promise((r) => setTimeout(r, 20));
+      await s.close();
+      return lines.filter((l) => /#pair=/.test(l));
+    };
+    const failed = await run();
+    assert.equal(failed.length, 1);
+    assert.match(failed[0], /no browser could be opened; open this link: http:\/\/127\.0\.0\.1:1\/#pair=/);
+    assert.doesNotMatch(failed[0], /#pair=a{31}1/, 'a fresh code, not the one in the launcher file');
+    assert.deepEqual(await run({ pairFirst: true }), [], 'the page paired first: nothing printed');
+    assert.equal((await run({ events: [['error', new Error('ENOENT')], ['exit', -2, null]] })).length, 1, 'once');
+    assert.deepEqual(await run({ events: [['exit', 0, null]] }), [], 'the opener succeeded');
   });
 
   test('the build root and settings are checked again before every rebuild: a settings file removed since is refused', async () => {
