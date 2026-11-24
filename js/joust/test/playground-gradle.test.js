@@ -684,7 +684,7 @@ async function drive(server, { views }) {
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-    await page.goto(server.url);
+    await page.goto(server.pairingUrl());
     await page.waitForSelector('body[data-ready=true]', { timeout: 180_000 });
     const transcript = await walkthrough(page, { views });
     assert.deepEqual(errors, []);
@@ -820,7 +820,7 @@ describe('ADR-0024 Q1: the native joust playground in a Gradle project', { skip:
           const timer = setTimeout(() => reject(new Error(`no URL in time:\n${out}`)), 15 * 60_000);
           child.stdout.on('data', (b) => {
             out += b;
-            const m = /(http:\/\/127\.0\.0\.1:\d+\/#token=[A-Za-z0-9_-]+)/.exec(out);
+            const m = /(http:\/\/127\.0\.0\.1:\d+\/#pair=[A-Za-z0-9_-]{32})/.exec(out);
             if (m) { clearTimeout(timer); resolve(m[1]); }
           });
           child.on('exit', (code) => reject(new Error(`joust playground exited (${code}):\n${out}`)));

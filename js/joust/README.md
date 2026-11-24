@@ -97,13 +97,18 @@ How it works: the playground server launches the project's dev host (`joust-host
 chain reads from the ledger. The page renders what the host describes, checks every body itself before an identity signs it
 (protocol 1's D13 rules, as the conformance kit's reference checker decides them: `verifyHostResult` in
 `@julclang/state-client`, plus the page verifier; publications included), shows for review what the body itself says
-(fee, what the signer pays in all, validity, signers, outputs), and asks the server to submit. Keys never leave the page: the
+(fee, what the signer pays in all, validity, signers, outputs, and the state before, from the chain, and after, from
+the body; the dev host's own prediction is folded apart and not used), and asks the server to submit. If a submission's
+answer is lost, the page looks the transaction up in the session's history; if it is not there, it is shown as
+"outcome unknown" (check the history before trying again). Keys never leave the page: the
 server learns addresses only. A reload starts a new session with new identities.
 
 The server listens on `127.0.0.1` only. Every request needs a per-run session token, and requests with another `Host`
-or `Origin` are refused. The command opens the page through a private launcher file, so the token appears in no log
-line or process argument; with `--no-open` (or when no browser can be opened) it prints the link with the token in its
-fragment instead. Do not share that link.
+or `Origin` are refused. The token is never in a URL, a file or a log line: the page pairs once. The command opens the
+page through a private launcher file whose link carries a single-use pairing code (valid ten minutes); the page trades
+it for the token and the code is spent (the launcher file is removed then). With `--no-open`, or when no browser can be
+opened, the command prints such a single-use link instead. A spent or expired link pairs nothing: run `joust playground`
+again. A paired tab keeps working across reloads.
 
 What offline success means: the dev host built the transaction with this project's JOUST, the page's checks passed, the
 ledger's modelled rules passed and the scripts accepted it. It is not a node's acceptance. The ledger refuses votes,

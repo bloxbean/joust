@@ -5,9 +5,11 @@
 //
 // Surface (D8):
 // - 127.0.0.1 only; no option for another address.
-// - A session token (32 random bytes) per server start, given to the page in the URL fragment the command opens; every
-//   /api request carries it in the `x-joust-playground` header. A request without it, or with another, is refused
-//   before any work (I5).
+// - A session token (32 random bytes) per server start, held in memory only: never in a URL, a file or a log line. The
+//   page gets it once by pairing: the link the command opens (or prints) carries a single-use pairing code in its
+//   fragment, valid ten minutes, which the page exchanges at POST /pair for the token; the code is then spent. Every
+//   /api request carries the token in the `x-joust-playground` header. A request without it, or with another, is
+//   refused before any work (I5).
 // - `Host` must be 127.0.0.1:<port> or localhost:<port> (DNS rebinding); `Origin`, when present, the server's own. No
 //   CORS headers; OPTIONS is refused.
 // - Routes take bounded JSON bodies, never a path, a command or a URL. The page's assets are the only files served.
@@ -18,6 +20,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { offlineSession, StageError } from './session.js';
 
 export const TOKEN_HEADER = 'x-joust-playground';
+const PAIR_TTL_MS = 10 * 60_000;
 const MAX_BODY = 1024 * 1024;
 const MAX_SESSIONS = 4;
 const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; "
@@ -62,12 +65,37 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @param o.page     the page: { 'index.html': Buffer, 'assets/x.js': Buffer, … } (see page.js)
  * @param o.port     default 0 (any free port)
  * @param o.attacks  the attack suite's default for new offline sessions (Q7: on)
- * @returns { url (with the token in its fragment), port, token, close() }
+ * @param o.pairTtlMs how long a pairing code lives (default ten minutes)
+ * @param o.onPaired  called after a pairing code is spent (the command removes its launcher file)
+ * @returns { pairingUrl() (a fresh single-use link), port, token (in memory, for tests), close() }
  */
 export async function startPlayground({ root, engine, page, port = 0, attacks = true, log = () => {},
-  session: makeSession = offlineSession, source } = {}) {
+  session: makeSession = offlineSession, source, pairTtlMs = PAIR_TTL_MS, onPaired = () => {} } = {}) {
   const token = randomBytes(32).toString('base64url');
   const tokenBytes = Buffer.from(token);
+  const pairings = new Map();     // code -> expiry (ms): single use
+  const pairingCode = () => {
+    const now = Date.now();
+    for (const [c, at] of pairings) if (at <= now) pairings.delete(c);
+    if (pairings.size >= 16) pairings.delete(pairings.keys().next().value);
+    const code = randomBytes(24).toString('base64url');
+    pairings.set(code, now + pairTtlMs);
+    return code;
+  };
+  /** Spends a pairing code: true once, while it lives. */
+  const spend = (code) => {
+    if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(code)) return false;
+    let found = null;
+    for (const c of pairings.keys()) {
+      const a = Buffer.from(c);
+      const b = Buffer.from(code);
+      if (a.length === b.length && timingSafeEqual(a, b)) found = c;
+    }
+    if (found === null) return false;
+    const live = pairings.get(found) > Date.now();
+    pairings.delete(found);
+    return live;
+  };
   const sessions = new Map();     // id -> session (Map order = least recently used first)
   let counter = 0;
   let bound = 0;
@@ -198,13 +226,27 @@ export async function startPlayground({ root, engine, page, port = 0, attacks = 
       if (origin !== undefined && !hosts.map((h) => 'http://' + h).includes(origin)) return refuse(res, 403, 'foreign Origin');
       const url = new URL(req.url, 'http://' + req.headers.host);
       // Cross-site requests are refused, except a top-level navigation to the page itself: the command opens it from a
-      // file:// launcher (a cross-site initiator), the page holds no secret until its fragment brings the token, and
+      // file:// launcher (a cross-site initiator), the page holds no secret until it pairs (a same-origin POST), and
       // frame-ancestors 'none' keeps it out of frames. /api/ stays same-origin only (and needs the token besides).
       const site = req.headers['sec-fetch-site'];
       const navigation = req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
         && (req.method === 'GET' || req.method === 'HEAD') && !url.pathname.startsWith('/api/');
       if (site && !['same-origin', 'none'].includes(site) && !navigation) {
         return refuse(res, 403, 'cross-site request');
+      }
+      // Pairing (D8): a single-use code from the link the command opened, for the session token, once.
+      if (url.pathname === '/pair') {
+        if (req.method !== 'POST') return refuse(res, 405, 'POST only');
+        if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) return refuse(res, 415, 'JSON only');
+        let body;
+        try {
+          body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+        } catch (e) {
+          return refuse(res, e.status ?? 400, e.status ? e.message : 'malformed JSON');
+        }
+        if (!spend(body?.code)) return refuse(res, 401, 'unknown, spent or expired pairing code: run joust playground again for a new link');
+        try { onPaired(); } catch { /* the command's cleanup */ }
+        return json(res, 200, { result: { token } });
       }
       if (url.pathname.startsWith('/api/')) {
         if (req.method !== 'POST') return refuse(res, 405, 'POST only');
@@ -250,7 +292,8 @@ export async function startPlayground({ root, engine, page, port = 0, attacks = 
   return {
     port: bound,
     token,
-    url: `http://127.0.0.1:${bound}/#token=${token}`,
+    /** A link that pairs one page: a fresh single-use code in its fragment (never the token). */
+    pairingUrl: () => `http://127.0.0.1:${bound}/#pair=${pairingCode()}`,
     sessions,
     async close() {
       closed = true;
