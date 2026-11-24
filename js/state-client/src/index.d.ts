@@ -268,4 +268,7 @@ export declare function verifyHostResult(input: {
   protocolParams: Record<string, any>;
   result: { prepared: Record<string, any> };
 }): { problems: string[]; sites: string[];
-  report?: { plan: Record<string, any>; walletNet: Record<string, string>; signers: Hex[]; created: Hex | null } };
+  report?: { plan: Record<string, any>; walletNet: Record<string, string>; signers: Hex[]; created: Hex | null;
+    before: unknown; after: unknown; removed: boolean } };
+/** Plutus data from hex as the pinned JuLC decoder reads it (byte strings of at most 64 bytes per chunk); throws. */
+export declare function plutusData(hex: Hex): unknown;

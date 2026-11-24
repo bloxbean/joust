@@ -28,17 +28,23 @@ const SETTLE_POLL_MS = 1000;
 const CONFIRMATION_GRACE_MS = 30_000;
 const $ = (id) => document.getElementById(id);
 
-// ---- the session token: from the URL fragment the command opened, then sessionStorage (never a query string)
-function token() {
-  const m = /(?:^#|&)token=([A-Za-z0-9_-]{20,})/.exec(location.hash);
+// ---- the session token (D8): paired once with the single-use code of the link the command opened (its fragment, never
+// a query string), then kept in this tab's sessionStorage. The token itself is never in a URL.
+let TOKEN = null;
+async function pair() {
+  const m = /(?:^#|&)pair=([A-Za-z0-9_-]{32})(?:&|$)/.exec(location.hash);
   if (m) {
-    try { sessionStorage.setItem('joust-playground-token', m[1]); } catch { /* private mode: memory only */ }
     history.replaceState(null, '', location.pathname);
-    return m[1];
+    // Relative: the page may be served under joust dev's /playground/ (its /playground/pair).
+    const r = await fetch('pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
+    const j = await r.json().catch(() => null);
+    if (r.ok && typeof j?.result?.token === 'string') {
+      try { sessionStorage.setItem('joust-playground-token', j.result.token); } catch { /* private mode: memory only */ }
+      return j.result.token;
+    }
   }
   try { return sessionStorage.getItem('joust-playground-token'); } catch { return null; }
 }
-const TOKEN = token();
 
 class StageFailure extends Error {
   constructor(e) {
@@ -319,7 +325,10 @@ function drawDevkitBanner(s, b) {
     s.stale ? h('div', { class: 'stale', id: 'stale' },
       h('strong', { text: 'The project was rebuilt.' }), ' This session runs the build it started with and prepares nothing more. ',
       h('button', { text: 'New session on the new build', onclick: () => guard(() => startSession()) })) : null,
-    s.ended ? h('div', { class: 'stale', text: `The dev host ended (${s.ended}). Start a new session.` }) : null,
+    s.fenced ? h('div', { class: 'stale', id: 'fenced' }, h('strong', { text: 'The dev host disagrees with the chain' }),
+      ` (${s.fenced}). It prepares nothing more; what is shown is what the chain shows. `,
+      h('button', { text: 'New session', onclick: () => guard(() => startSession()) })) : null,
+    s.ended ? h('div', { class: 'stale', id: 'ended', text: `The session ended: ${s.ended}` }) : null,
   );
 }
 
@@ -800,17 +809,19 @@ async function prerequisites(signer) {
  * The review panel (D7 step 4): what the checks read from the body; resolves true on approval, false on decline. A
  * scenario replay approves without showing it (the same checks ran).
  */
-function approval({ title, lines, predicted, who }) {
+function approval({ title, lines, states, predicted, who }) {
   if (state.replaying) return Promise.resolve(true);
   return new Promise((resolve) => {
     const panel = $('review');
     const done = (ok) => () => { panel.hidden = true; panel.replaceChildren(); resolve(ok); };
     panel.replaceChildren(
       h('h3', { text: title }),
-      h('p', { class: 'muted', text: 'The page checked this body itself. What follows "predicted" is the host\'s claim, shown for review.' }),
+      h('p', { class: 'muted', text: 'The page checked this body itself: everything above the line is read from the body and the chain.' }),
       h('table', {}, lines.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
-      predicted ? h('div', {}, h('h4', { text: 'Before (current state)' }), h('pre', { text: currentState() }),
-        h('h4', { text: 'After (predicted)' }), h('pre', { class: 'predicted', text: show(predicted) })) : null,
+      states,
+      // The host's own projection: not checked and not part of the decision, kept apart and folded.
+      predicted ? h('details', { class: 'predicted' }, h('summary', { text: 'The dev host\'s prediction (unchecked, not used to decide)' }),
+        h('pre', { id: 'review-predicted', text: show(predicted) })) : null,
       h('div', { class: 'actions' },
         h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${who}`, onclick: done(true) }),
         h('button', { id: 'decline', text: 'Decline', onclick: done(false) })));
@@ -819,19 +830,32 @@ function approval({ title, lines, predicted, who }) {
   });
 }
 
-/** One signer's witnesses on the body, after its own approval (stage wallet). */
-async function signAs(r, id, label, approve) {
+/**
+ * One signer's witnesses on the body, after its own approval (stage wallet). A CIP-30 wallet is checked as it is now
+ * (#179 P2) and the handoff recorded before it sees the body: from then on the body is never discarded (only its expiry
+ * releases its inputs, ADR-0022 D8).
+ */
+async function signAs(r, id, label, report, approve) {
   if (!await approve()) {
     record({ label, outcome: 'declined' });
     note(`${label}: declined by ${id.label}; the body was discarded`);
     throw Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: `declined at review by ${id.label}`, label }), { quiet: true });
   }
+  if (id.cip30) {
+    await walletStillMatches(id, r.prepared.cbor, label);
+    try {
+      await sapi('handoff', { reservation: r.prepared.reservation });
+    } catch (e) {
+      throw labelled(e, 'wallet', label);
+    }
+    report.submitted = true;
+  }
   try {
     // CIP-30 signTx(tx, partialSign): the wallet adds its own witnesses only.
     return await id.wallet.signTx(r.prepared.cbor, true);
   } catch (e) {
-    const err = new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
-    throw Object.assign(err, { handedOut: !!id.cip30 });
+    // An identity's keys are in this page: its body went nowhere and is discarded on the way out.
+    throw new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
   }
 }
 
@@ -855,20 +879,19 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
     ['scripts run', String(plan.redeemers.length)],
     ['outputs', plan.outputs.map((o) => `${o.address.slice(0, 24)}… ${ada(o.value.lovelace)}${Object.keys(o.value).length > 1 ? ` + ${Object.keys(o.value).length - 1} asset(s)` : ''}${o.datum ? ' (datum)' : ''}`).join('\n')],
   ];
+  // The state change, as the checks read it: before from the chain's target output, after from the body's checked
+  // continuation (a destroy removes the state; a creation has none before). Built per panel (a node lives in one).
+  const states = () => (publication ? null : h('div', { class: 'states' },
+    h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
+    h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) })));
   const title = publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}`;
   // 5. sign (stage wallet): the caller, then each co-signer, each after its own approval of the same checked body.
   let cbor = r.prepared.cbor;
-  try {
-    for (const id of [signer, ...cosigners]) {
-      const who = id === signer ? id.label : `${id.label} (co-signer)`;
-      const w = await signAs(r, id, label, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, predicted, who }));
-      cbor = assemble(cbor, w).cbor;
-    }
-  } catch (e) {
-    // A CIP-30 wallet had the body: it is handed out, so it is never discarded (only its expiry releases its inputs,
-    // ADR-0022 D8). An identity's keys are in this page: its body went nowhere and is discarded.
-    if (e.handedOut) report.submitted = true;
-    throw e;
+  for (const id of [signer, ...cosigners]) {
+    const who = id === signer ? id.label : `${id.label} (co-signer)`;
+    const w = await signAs(r, id, label, report, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, states: states(),
+      predicted, who }));
+    cbor = assemble(cbor, w).cbor;
   }
   // A keyed attempt is journaled before it is handed to the chain (protocol 1, keyed duty 1).
   if (op) {
@@ -880,19 +903,37 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   try {
     res = await sapi('submit', { reservation: r.prepared.reservation, cbor });
   } catch (e) {
-    // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
-    // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a host
-    // that ended, a malformed transaction) must not leave the instance pending. A refused keyed attempt leaves the
-    // journal (it is rebuilt at once).
-    // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its inputs
-    // (the server refuses that discard as well); its keyed attempt stays journaled. A failure before the node saw it
-    // is still released.
-    if (devkit() && e.code === 'nodeRefused') report.submitted = true;
-    else if (op) {
-      op.attempts = op.attempts.filter((a) => a.txHash !== r.prepared.txHash);
-      await operations.put(op);
+    // A lost answer (the request may have reached the ledger or the node).
+    if (!(e instanceof StageFailure) || e.code === 'http') {
+      report.submitted = true;   // never released: it may be on the ledger
+      if (devkit()) {
+        // DevKit: the server journaled the submission before sending it; the chain says whether it landed.
+        res = { txHash: r.prepared.txHash, status: 'submitted', transport: 'unknown', validTo: Number(parseTx(r.prepared.cbor).ttl),
+          settlementSlots: state.session.settlementSlots };
+      } else {
+        res = await reconcile(r.prepared.txHash);
+        if (!res) {
+          record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
+            message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
+          note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
+          throw Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true });
+        }
+      }
+    } else {
+      // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
+      // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a host
+      // that ended, a malformed transaction) must not leave the instance pending. A refused keyed attempt leaves the
+      // journal (it is rebuilt at once).
+      // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its inputs
+      // (the server refuses that discard as well); its keyed attempt stays journaled. A failure before the node saw it
+      // is still released.
+      if (devkit() && e.code === 'nodeRefused') report.submitted = true;
+      else if (op) {
+        op.attempts = op.attempts.filter((a) => a.txHash !== r.prepared.txHash);
+        await operations.put(op);
+      }
+      throw labelled(e, 'ledger', label);
     }
-    throw labelled(e, 'ledger', label);
   }
   report.submitted = true;
   // 7. settle: on DevKit as the chain settles it (I7); offline at once
@@ -900,10 +941,46 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
   note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)`, 'ok');
   if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
-  for (const a of res.acceptedAttacks) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
+  for (const a of res.acceptedAttacks ?? []) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
   await refresh();
   return res;
 }
+/**
+ * A CIP-30 wallet just before it signs (#179 P2): its network, its change address (the payer the body was built and
+ * checked for) and its UTxOs, read again; every input and collateral input the body takes from the payer's address
+ * must be one the wallet holds and DevKit shows unspent.
+ */
+async function walletStillMatches(signer, cbor, label) {
+  const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
+  const read = async () => {
+    try {
+      return await walletView(signer.wallet);
+    } catch (e) {
+      throw refuse(`the wallet could not be read: ${reason(e)}`);
+    }
+  };
+  let view = await read();
+  if (view.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${view.networkId}: connect the wallet again`);
+  if (view.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect the wallet again');
+  const tx = parseTx(cbor);
+  const refs = [...new Set([...tx.inputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
+  const { outputs } = await resolveInputs(cbor);
+  // #179 r2: every input and collateral input must resolve on the chain before it is classified by address.
+  const missing = refs.find((ref) => !outputs.has(ref));
+  if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
+  const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
+  const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
+  for (const ref of payer) if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent: prepare the call again`);
+  // D-6: a wallet indexes new outputs a moment after DevKit does: read it again for a few seconds before refusing.
+  for (let attempt = 0; ; attempt++) {
+    const absent = payer.find((ref) => !view.utxos.has(ref));
+    if (!absent) return;
+    if (attempt >= 4) throw refuse(`the wallet does not hold the input ${absent} the body spends (does it follow this DevKit?)`);
+    await new Promise((ok) => setTimeout(ok, 1000));
+    view = await read();
+  }
+}
+
 /**
  * DevKit (D7 step 7): follows a submitted transaction until it is included (the call then resolves and state is read
  * again), then on to final in the background. Never shown as confirmed before the chain reported it included (I7);
@@ -1031,16 +1108,43 @@ function currentState() {
   return li.length ? li[0].textContent : '(none)';
 }
 
+/** The session's record of a transaction the page submitted, as the submit route answers; null if it has none. */
+async function reconcile(txHash, session = state.session.session, tries = 3) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const entry = (await api('history', { session })).find((x) => x.txHash === txHash);
+      if (entry) return { ...entry, acceptedAttacks: entry.acceptedAttacks ?? [] };
+    } catch { /* the server too may be unreachable for a moment */ }
+    if (i + 1 < tries) await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return null;
+}
+
+/** An "outcome unknown" entry, checked again against its session's history and updated in place. */
+async function recheck(entry) {
+  const res = await reconcile(entry.txHash, entry.session, 1);
+  if (!res) {
+    note(`${entry.label}: still unknown (${entry.txHash.slice(0, 16)}…): the session's history does not show it`, 'warn');
+    return;
+  }
+  Object.assign(entry, { outcome: 'confirmed', slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks,
+    message: `confirmed in slot ${res.slot} (rechecked)` });
+  drawHistory();
+  note(`${entry.label}: confirmed in slot ${res.slot} (${entry.txHash.slice(0, 16)}…), rechecked`, 'ok');
+  await refresh();
+}
+
 function drawHistory() {
   const good = (o) => o === 'confirmed' || o === 'final' || /^included/.test(o ?? '');
   const pending = (o) => o === 'submitted' || o === 'declined' || /^rolled back/.test(o ?? '');
-  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? '' : 'error',
-    'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
+  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? ''
+    : e.outcome === 'outcome unknown' ? 'warn' : 'error', 'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
     h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
     e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
     e.sites?.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
     e.txHash ? h('div', {}, h('code', { text: e.txHash })) : null,
+    e.outcome === 'outcome unknown' ? h('button', { class: 'recheck', text: 'recheck', onclick: () => guard(() => recheck(e)) }) : null,
     e.attacks !== undefined ? h('div', { class: e.accepted?.length ? 'warn' : 'muted',
       text: `attacks run: ${e.attacks}; accepted by the scripts: ${e.accepted?.length ?? 0}` }) : null))));
 }
@@ -1053,6 +1157,11 @@ async function guard(fn) {
   try {
     await fn();
   } catch (e) {
+    if (e.code === 'replaced') {
+      // D-4: another tab started a DevKit session; this one is closed.
+      $('banner').replaceChildren(h('div', { class: 'stale', id: 'replaced', text: e.message }));
+      return;
+    }
     if (!e.quiet) {
       const notModelled = e.code === 'NotModelled' || e.notModelled;
       const message = notModelled ? `not modelled offline: try DevKit (${e.message})` : e.message;
@@ -1069,8 +1178,10 @@ async function guard(fn) {
 
 // ---- start
 (async () => {
+  TOKEN = await pair().catch(() => null);
   if (!TOKEN) {
-    $('banner').replaceChildren(h('p', { class: 'error', text: 'No session token: open the playground from the URL `joust playground` printed.' }));
+    $('banner').replaceChildren(h('p', { class: 'error', text: 'Not paired: this link was used already or expired. Run joust playground again '
+      + '(or joust playground --no-open for a single-use link).' }));
     return;
   }
   await guard(async () => {

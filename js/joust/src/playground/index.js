@@ -9,10 +9,10 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
 import { attach } from '../dev.js';
-import { checkDevkitNetwork, DEFAULT_TTL_MS } from './devkit.js';
+import { checkDevkitNetwork, DEFAULT_TTL_MS, devkitIdentity, sameChain, yaciChain } from './devkit.js';
 import { pageFiles } from './page.js';
 import { startPlayground } from './server.js';
-import { gradleBuild, gradleSource, isGradleProject, runGradle } from './gradle.js';
+import { gradleBuild, gradleSource, isGradleProject, readSpecBytes, runGradle } from './gradle.js';
 
 /**
  * DevKit mode's session options from joust.config.json's "playground": the validity window (ttlMs, default 60 s) and
@@ -48,9 +48,8 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
   if (!r.ok) throw new Error('joust playground: the build failed (see above)');
   const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
   const page = await pageFiles();
-  const server = await startPlayground({ root, engine, page, port: port ?? 0, log, mode,
-    devkit: net ? devkitOptions(config, net) : {} });
-  return announce(server, { open, log, mode });
+  return announce((o) => startPlayground({ root, engine, page, port: port ?? 0, log, mode,
+    devkit: net ? devkitOptions(config, net) : {}, ...o }), { open, log, mode });
 }
 
 /** DevKit mode's network (I4): checked before anything is attached or built, then attached as joust dev does. */
@@ -58,26 +57,40 @@ async function devkitNetwork(config, networkName, log) {
   const name = networkName ?? config.network;
   checkDevkitNetwork(config.networks?.[name], name);
   const net = await attach(config, name, { log });
-  log(`attached to ${name} (${net.chain}, admin ${net.admin})`);
+  // D-1, M3-S1: the chain API must serve the admin API's chain (a public network's API behind a DevKit admin fails).
+  const identity = await devkitIdentity(net.admin);
+  const g = await yaciChain(net).genesis().catch((e) => { throw new Error(`joust playground: ${net.chain}/genesis: ${e.message}`); });
+  if (!sameChain(identity, g)) {
+    throw new Error(`joust playground: ${name}'s chain API (${net.chain}) serves another chain (magic ${g.networkMagic}) than its DevKit`
+      + ` admin API (magic ${identity.protocolMagic}, start ${identity.startTime})`);
+  }
+  log(`attached to ${name} (${net.chain}, admin ${net.admin}, magic ${identity.protocolMagic})`);
   return net;
 }
 
 /**
- * D8: the token is in no log line and no process's arguments (another local user can read both). The browser is opened
- * on a private launcher file that forwards to the tokenised URL; only --no-open (or no browser) prints the token, as
- * the one way to reach the page then.
+ * Starts the server and tells the user how to reach it. D8: the session token is in no file, log line or process
+ * argument. The browser opens a private launcher file (no link in any process's arguments) that forwards to a pairing
+ * link: a single-use code, valid ten minutes, which the page exchanges for the token once; the file is removed when the
+ * page pairs. Only a printed link (--no-open, or no browser could be asked) shows a code, and it pairs one page. The
+ * same for npm and Gradle projects.
  */
-function announce(server, { open, log, mode }) {
-  const unopened = () => log(`  no browser could be opened: ${server.url} (it carries this run's session token: do not share it)`);
-  const opened = open && openBrowser(server.url, unopened);
-  if (opened) {
+async function announce(start, { open, log, mode }) {
+  let launcher = null;
+  const server = await start({ onPaired: () => launcher?.remove() });
+  const printed = (why) => {
+    log(`  ${why}: ${server.pairingUrl()}`);
+    log('  (a single-use link, valid ten minutes: it pairs one page; run joust playground again for another)');
+  };
+  launcher = open ? openBrowser(server.pairingUrl(), () => { launcher?.remove(); printed('no browser could be opened; open this link'); }) : null;
+  if (launcher) {
     log(`joust playground (${mode}): http://127.0.0.1:${server.port}/ (opened in your browser)`);
-    log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for the link');
+    log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link');
     const close = server.close;
-    server.close = async () => { opened.remove(); return close(); };
+    server.close = async () => { launcher.remove(); return close(); };
   } else {
-    log(`joust playground (${mode}): ${server.url}`);
-    log('  the link carries this run\'s session token: do not share it.');
+    log(`joust playground (${mode}): http://127.0.0.1:${server.port}/`);
+    printed(open ? 'no browser could be opened; open this link' : 'open this link');
   }
   log('  Ctrl-C stops the playground.');
   return server;
@@ -100,17 +113,17 @@ async function gradlePlayground({ root, config, port, acceptAbi, acceptLock, ope
   } catch (e) {
     throw new Error(`joust playground: the build failed: ${e.message}`);
   }
-  const source = gradleSource(build.project, { log });
+  // The spec this gated build wrote: the first session runs it, or builds again (gates included) if it changed since.
+  const source = gradleSource(build.project, { log, gatedSpec: readSpecBytes(build.project) });
   const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
   const page = await pageFiles();
-  const server = await startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, mode,
-    devkit: net ? devkitOptions(config, net) : {} });
-  return announce(server, { open, log, mode: `${mode}, Gradle` });
+  return announce((o) => startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, mode,
+    devkit: net ? devkitOptions(config, net) : {}, ...o }), { open, log, mode: `${mode}, Gradle` });
 }
 
 /**
- * A private launcher file (mode 0600 in a fresh 0700 directory) that forwards to the tokenised URL: the browser gets a
- * file:// link, so the token is in no process's arguments.
+ * A private launcher file (mode 0600 in a fresh 0700 directory) that forwards to a pairing link: the browser gets a
+ * file:// link, so the code is in no process's arguments, and the code is spent when the page pairs.
  */
 export function writeLauncher(url) {
   const dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
@@ -134,7 +147,7 @@ function openBrowser(url, failed) {
     const [cmd, args] = process.platform === 'darwin' ? ['open', [launcher.link]]
       : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', launcher.link]] : ['xdg-open', [launcher.link]];
     spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', failed).unref();
-    // Removed after ten minutes (a browser's cold start may take a while), or when the playground stops.
+    // Removed when the page pairs, after ten minutes (the code's life), or when the playground stops.
     setTimeout(launcher.remove, 600_000).unref();
     return launcher;
   } catch {

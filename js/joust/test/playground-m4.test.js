@@ -218,7 +218,7 @@ describe('ADR-0024 M4 walkthrough in Chromium', { skip: skip || (!chromium && 'P
       globalThis.__draws = [];
       crypto.getRandomValues = (a) => { const r = draw(a); if (r.length === 32) globalThis.__draws.push([...new Uint8Array(r.buffer, r.byteOffset, 32)]); return r; };
     });
-    await page.goto(server.url);
+    await page.goto(server.pairingUrl());
     await page.waitForSelector('body[data-ready=true]', { timeout: 120_000 });
   });
   after(async () => {

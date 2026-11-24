@@ -106,11 +106,16 @@ function readData(r) {
       if (tag >= 121 && tag <= 127) d = { constr: tag - 121, fields: listOf(r) };
       else if (tag >= 1280 && tag <= 1400) d = { constr: tag - 1280 + 7, fields: listOf(r) };
       else if (tag === 102) {
+        // [index, fields], definite or indefinite (exactly two elements, then the break), as JuLC's decoder reads it.
         const pair = head(r);
-        if (pair.major !== 4 || pair.n !== 2n) throw new CborError('tag 102 needs [index, fields]');
+        if (pair.major !== 4 || (pair.n !== 2n && pair.n !== null)) throw new CborError('tag 102 needs [index, fields]');
         const index = head(r);
-        if (index.major !== 0) throw new CborError('tag 102: a constructor index');
+        if (index.major !== 0 || index.n === null) throw new CborError('tag 102: a constructor index');
         d = { constr: Number(index.n), fields: listOf(r) };
+        if (pair.n === null) {
+          if (!isBreak(r)) throw new CborError('tag 102 needs [index, fields]');
+          r.i++;
+        }
       } else if (tag === 2 || tag === 3) {
         const b = head(r);
         if (b.major !== 2) throw new CborError('a bignum is tagged bytes');

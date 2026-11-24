@@ -5,9 +5,11 @@
 //
 // Surface (D8):
 // - 127.0.0.1 only; no option for another address.
-// - A session token (32 random bytes) per server start, given to the page in the URL fragment the command opens; every
-//   /api request carries it in the `x-joust-playground` header. A request without it, or with another, is refused
-//   before any work (I5).
+// - A session token (32 random bytes) per server start, held in memory only: never in a URL, a file or a log line. The
+//   page gets it once by pairing: the link the command opens (or prints) carries a single-use pairing code in its
+//   fragment, valid ten minutes, which the page exchanges at POST /pair for the token; the code is then spent. Every
+//   /api request carries the token in the `x-joust-playground` header. A request without it, or with another, is
+//   refused before any work (I5).
 // - `Host` must be 127.0.0.1:<port> or localhost:<port> (DNS rebinding); `Origin`, when present, the server's own. No
 //   CORS headers; OPTIONS is refused.
 // - Routes take bounded JSON bodies, never a path, a command or a URL. The page's assets are the only files served.
@@ -19,6 +21,7 @@ import { offlineSession, StageError } from './session.js';
 import { devkitSession } from './devkit.js';
 
 export const TOKEN_HEADER = 'x-joust-playground';
+const PAIR_TTL_MS = 10 * 60_000;
 const MAX_BODY = 1024 * 1024;
 const MAX_SESSIONS = 4;
 const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; "
@@ -68,7 +71,10 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @param o.mode     'offline' (default) or 'devkit' (M3): every session of this handler runs in it
  * @param o.devkit   DevKit mode's session options: { net (attach()), ttlSlots, state, … } (devkit.js)
  * @param o.base     the path the handler serves ('/' or '/playground/')
- * @returns { token, sessions, handles(pathname), handle(req, res), close() }
+ * @param o.pairTtlMs how long a pairing code lives (default ten minutes)
+ * @param o.onPaired  called after a pairing code is spent (the command removes its launcher file)
+ * @returns { pairingPath() (the base with a fresh single-use code in its fragment), token (in memory, for tests),
+ *   sessions, handles(pathname), handle(req, res), close() }
  */
 /** The verifiers' scripts (double-wrapped cborHex) the runtime engine embeds; {} if none is at hand. */
 async function engineVerifiers(engine) {
@@ -93,16 +99,43 @@ async function engineVerifiers(engine) {
 }
 
 export function playgroundHandler({ root, engine, page, attacks = true, log = () => {}, mode = 'offline', devkit = {}, base = '/',
-  session: makeSession = mode === 'devkit' ? devkitSession : offlineSession, source } = {}) {
+  session: makeSession = mode === 'devkit' ? devkitSession : offlineSession, source, pairTtlMs = PAIR_TTL_MS, onPaired = () => {} } = {}) {
   if (!['offline', 'devkit'].includes(mode)) throw new Error(`playground: no mode ${mode}`);
   if (!/^\/(?:[a-z]+\/)?$/.test(base)) throw new Error('playground: base is / or /<name>/');
   const token = randomBytes(32).toString('base64url');
   const tokenBytes = Buffer.from(token);
+  const pairings = new Map();     // code -> expiry (ms): single use
+  const pairingCode = () => {
+    const now = Date.now();
+    for (const [c, at] of pairings) if (at <= now) pairings.delete(c);
+    if (pairings.size >= 16) pairings.delete(pairings.keys().next().value);
+    const code = randomBytes(24).toString('base64url');
+    pairings.set(code, now + pairTtlMs);
+    return code;
+  };
+  /** Spends a pairing code: true once, while it lives. */
+  const spend = (code) => {
+    if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(code)) return false;
+    let found = null;
+    for (const c of pairings.keys()) {
+      const a = Buffer.from(c);
+      const b = Buffer.from(code);
+      if (a.length === b.length && timingSafeEqual(a, b)) found = c;
+    }
+    if (found === null) return false;
+    const live = pairings.get(found) > Date.now();
+    pairings.delete(found);
+    return live;
+  };
   const sessions = new Map();     // id -> session (Map order = least recently used first)
   let counter = 0;
 
+  const replaced = new Set();     // DevKit: sessions ended because another tab started one (D-4)
   const use = (id) => {
     const s = sessions.get(str(id, 'session', /^s\d{1,9}$/));
+    if (!s && replaced.has(id)) {
+      throw new StageError('session', 'replaced', 'another tab took this DevKit session: this one is closed (reload to continue here)');
+    }
     if (!s) throw new StageError('session', 'unknownSession', 'no such session: start a new one');
     sessions.delete(id);
     sessions.set(id, s);
@@ -124,6 +157,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       // session ends (its reservations stay journaled) before the next one restores them.
       for (const [sid, s] of [...sessions]) {
         sessions.delete(sid);
+        replaced.add(sid);
         await s.close().catch(() => {});
       }
       const id = 's' + ++counter;
@@ -211,6 +245,12 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     'page': async (b) => use(b.session).page(b.method === 'objects' ? 'objects' : 'instances', str(b.listing, 'listing'), b.after, b.limit ?? 50),
     'decode': async (b) => use(b.session).decode(str(b.contract, 'contract', CONTRACT), str(b.datum, 'datum', HEX)),
     'discard': async (b) => use(b.session).discard(str(b.reservation, 'reservation')),
+    // DevKit: the body goes to a CIP-30 wallet next; from now on it is never discarded (#179 P1-3).
+    'handoff': async (b) => {
+      const s = use(b.session);
+      if (typeof s.handOff !== 'function') throw new StageError('session', 'offline', 'offline sessions sign in the page');
+      return s.handOff(str(b.reservation, 'reservation'));
+    },
     'submit': async (b) => use(b.session).submit(str(b.reservation, 'reservation'), str(b.cbor, 'cbor', HEX)),
     'utxos': async (b) => use(b.session).utxos(str(b.address, 'address', /^addr_test1[0-9a-z]{20,200}$/)),
     'outputs': async (b) => {
@@ -256,7 +296,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       // Mounted (D3): the path under the base (the handler sees only its base and what is under it).
       const path = '/' + url.pathname.slice(base.length);
       // Cross-site requests are refused, except a top-level navigation to the page itself: the command opens it from a
-      // file:// launcher (a cross-site initiator), the page holds no secret until its fragment brings the token, and
+      // file:// launcher (a cross-site initiator), the page holds no secret until it pairs (a same-origin POST), and
       // frame-ancestors 'none' keeps it out of frames. /api/ stays same-origin only (and needs the token besides).
       const site = req.headers['sec-fetch-site'];
       const navigation = req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
@@ -268,6 +308,21 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       if (base !== '/' && url.pathname === base.slice(0, -1)) {
         res.writeHead(308, { ...SECURITY, location: base });
         return res.end();
+      }
+      // Pairing (D8): a single-use code from the link the command opened, for the session token, once (under the
+      // base when mounted: joust dev's /playground/pair).
+      if (path === '/pair') {
+        if (req.method !== 'POST') return refuse(res, 405, 'POST only');
+        if (!/^application\/json\b/.test(req.headers['content-type'] ?? '')) return refuse(res, 415, 'JSON only');
+        let body;
+        try {
+          body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+        } catch (e) {
+          return refuse(res, e.status ?? 400, e.status ? e.message : 'malformed JSON');
+        }
+        if (!spend(body?.code)) return refuse(res, 401, 'unknown, spent or expired pairing code: run joust playground again for a new link');
+        try { onPaired(); } catch { /* the command's cleanup */ }
+        return json(res, 200, { result: { token } });
       }
       if (path.startsWith('/api/')) {
         if (req.method !== 'POST') return refuse(res, 405, 'POST only');
@@ -316,6 +371,8 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
 
   return {
     token,
+    /** The base with a fresh single-use pairing code in its fragment (never the token): a link pairs one page. */
+    pairingPath: () => `${base}#pair=${pairingCode()}`,
     sessions,
     /** Whether {@code pathname} is this handler's (mounted: the base and everything under it). */
     handles: (pathname) => base === '/' || pathname === base.slice(0, -1) || pathname.startsWith(base),
@@ -345,7 +402,8 @@ export async function startPlayground({ port = 0, ...o } = {}) {
   return {
     port: bound,
     token: pg.token,
-    url: `http://127.0.0.1:${bound}/#token=${pg.token}`,
+    /** A link that pairs one page: a fresh single-use code in its fragment (never the token). */
+    pairingUrl: () => `http://127.0.0.1:${bound}${pg.pairingPath()}`,
     sessions: pg.sessions,
     async close() {
       await pg.close();

@@ -56,18 +56,28 @@ async function injectWallets(page) {
   const { devWallet } = await import('@julclang/state-client/devwallet');
   const { generateMnemonic } = await import('@scure/bip39');
   const { wordlist } = await import('@scure/bip39/wordlists/english');
+  const { blockfrostProvider, chainOf } = await import('@julclang/state-client');
+  // A wallet that follows this DevKit holds its outputs; one that follows another chain shows none of them.
+  const devkitChain = chainOf(blockfrostProvider(STORE));
   const noChain = { utxosAt: async () => [] };
   const wallets = {
-    joustyano: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
+    joustyano: devWallet({ chain: devkitChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
     joustmainnet: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 1 }),
+    joustelsewhere: devWallet({ chain: noChain, mnemonic: generateMnemonic(wordlist, 256), networkId: 0 }),
   };
-  await page.exposeFunction('__joustTestWallet', async (name, method, arg) => wallets[name][method](arg));
+  const signs = { joustyano: 0, joustmainnet: 0, joustelsewhere: 0 };
+  await page.exposeFunction('__joustTestWallet', async (name, method, arg) => {
+    if (method === 'signTx') signs[name]++;
+    return wallets[name][method](arg);
+  });
+  wallets.signs = signs;
   await page.addInitScript(() => {
     const api = (name) => Object.fromEntries(['getNetworkId', 'getUtxos', 'getBalance', 'getCollateral', 'getUsedAddresses',
       'getUnusedAddresses', 'getChangeAddress', 'getRewardAddresses', 'signTx']
       .map((m) => [m, (arg) => window.__joustTestWallet(name, m, arg)]));
     window.cardano = window.cardano ?? {};
-    for (const [key, name] of [['joustyano', 'Joust test wallet (Yano)'], ['joustmainnet', 'Joust mainnet wallet']]) {
+    for (const [key, name] of [['joustyano', 'Joust test wallet (Yano)'], ['joustmainnet', 'Joust mainnet wallet'],
+      ['joustelsewhere', 'Joust wallet on another testnet']]) {
       window.cardano[key] = { name, apiVersion: '0.1.0', icon: '', enable: async () => api(key), isEnabled: async () => true };
     }
   });
@@ -90,7 +100,7 @@ describe('ADR-0024 M3 on Yaci DevKit: joust playground --mode devkit in Chromium
     page.on('pageerror', (e) => errors.push(String(e.stack ?? e)));
     page.on('request', (r) => { if (r.method() === 'POST') bodies.push({ url: r.url(), body: r.postData() ?? '' }); });
     wallets = await injectWallets(page);
-    await page.goto(p.url);
+    await page.goto(p.pairingUrl());
     await page.waitForSelector('body[data-ready=true]', { timeout: 300_000 });
   });
   after(async () => {
@@ -183,6 +193,25 @@ describe('ADR-0024 M3 on Yaci DevKit: joust playground --mode devkit in Chromium
     assert.ok(wallets.joustyano.address.startsWith('addr_test1'));
   });
 
+  test('#179 P2: a wallet that follows another chain is refused before it is asked to sign', async () => {
+    await idle();
+    await page.selectOption('#wallet-choice', 'joustelsewhere');
+    await idle();
+    await page.click('#connect');
+    await page.waitForFunction(() => {
+      const t = document.querySelector('#identities li.signer')?.innerText ?? '';
+      return /another testnet/.test(t) && !/(?:^|\s)0\.000000 ADA/.test(t);
+    }, null, { timeout: 120_000 });
+    await idle();
+    await page.fill('[data-call="action:increment"] input[data-kind=integer]', '1');
+    await idle();
+    await page.click('[data-call="action:increment"] button.run');
+    await approveUntil(has, 'another testnet: increment\\s+failed\\s+at stage wallet');
+    assert.match(await history(), /does not hold the input/);
+    assert.equal(wallets.signs.joustelsewhere, 0, 'never asked to sign');
+    assert.ok(wallets.signs.joustyano > 0);
+  });
+
   test('I1: no request carries a mnemonic or a key (the test identities\' public one included); no page error', async () => {
     const { wordlist } = await import('@scure/bip39/wordlists/english');
     const words = new Set(wordlist);
@@ -209,13 +238,23 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
     const { dev } = await import('../src/dev.js');
     const d = await dev({ root, config: loadConfig(root), port: 0, log: (l) => lines.push(String(l)) });
     try {
-      // D8: no log line carries the token; the private launcher file the log names does (0600).
+      // D8, S8: no token in any log line or file; the private launcher file (0600) the log names holds a single-use
+      // pairing link under /playground/, spent at /playground/pair.
       assert.ok(!lines.join('\n').includes('#token='), lines.join('\n'));
       assert.ok(lines.some((l) => l.includes(d.playground)), lines.join('\n'));
       const launcher = fileURLToPath(d.playground);
       assert.equal(statSync(launcher).mode & 0o777, 0o600);
-      const m = /\/playground\/#token=([A-Za-z0-9_-]{43})/.exec(readFileSync(launcher, 'utf8'));
-      assert.ok(m);
+      const text = readFileSync(launcher, 'utf8');
+      assert.ok(!text.includes('token'), 'no token in the launcher');
+      const code = /\/playground\/#pair=([A-Za-z0-9_-]{32})/.exec(text)?.[1];
+      assert.ok(code, text);
+      const pair = (c) => fetch(d.url + '/playground/pair', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: c }) });
+      const paired = await pair(code);
+      assert.equal(paired.status, 200);
+      const token = (await paired.json()).result.token;
+      assert.equal((await pair(code)).status, 401, 'single use');
+      assert.ok(!existsSync(launcher), 'the spent launcher is removed');
       const page = await fetch(d.url + '/playground/');
       assert.equal(page.status, 200);
       assert.equal(page.headers.get('access-control-allow-origin'), null);
@@ -226,7 +265,7 @@ describe('ADR-0024 M3 on Yaci DevKit: joust dev serves the playground at /playgr
       const refused = await fetch(d.url + '/playground/api/sessions/new', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       assert.equal(refused.status, 401);
       const r = await (await fetch(d.url + '/playground/api/sessions/new', { method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-joust-playground': m[1] }, body: '{}' })).json();
+        headers: { 'content-type': 'application/json', 'x-joust-playground': token }, body: '{}' })).json();
       assert.equal(r.result?.mode, 'devkit', JSON.stringify(r));
     } finally {
       await d.close();

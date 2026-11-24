@@ -21,7 +21,10 @@ export function readJar(bytes, what = 'jar') {
   const size = bytes.readUInt32LE(eocd + 12);
   const offset = bytes.readUInt32LE(eocd + 16);
   if (count === 0xffff || size === 0xffffffff || offset === 0xffffffff) fail('ZIP64 is not supported');
-  if (offset + size > eocd) fail('a malformed central directory');
+  // The end record is the file's end (nothing after its comment), and the central directory ends where it starts: no
+  // bytes a different zip reader could take for another archive.
+  if (eocd + 22 + bytes.readUInt16LE(eocd + 20) !== bytes.length) fail('bytes after the end of the archive');
+  if (offset + size !== eocd) fail('a malformed central directory');
   const entries = new Map();
   let p = offset;
   for (let n = 0; n < count; n++) {
@@ -34,12 +37,21 @@ export function readJar(bytes, what = 'jar') {
     const extraLen = bytes.readUInt16LE(p + 30);
     const commentLen = bytes.readUInt16LE(p + 32);
     const local = bytes.readUInt32LE(p + 42);
+    // Each record within the central directory, whose end is the end record's start.
+    if (p + 46 + nameLen + extraLen + commentLen > eocd) fail('a central directory record past its end');
     const name = bytes.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
-    // A name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken.
-    if (entries.has(name)) fail(`${name} appears twice`);
+    // A file name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken. A
+    // directory entry (a name ending in /) has no content: a repeated one is harmless and kept once.
+    if (entries.has(name)) {
+      if (name.endsWith('/')) continue;
+      fail(`${name} appears twice`);
+    }
     entries.set(name, { flags, method, compressed, uncompressed, local });
   }
+  // Exactly the declared number of records fills it: the JDK recounts the headers when the count is understated, and
+  // would see entries this reader did not.
+  if (p !== eocd) fail('the central directory holds other records than its end record counts');
   return {
     names: [...entries.keys()],
     read(name) {
@@ -61,12 +73,26 @@ export function readJar(bytes, what = 'jar') {
   };
 }
 
-/** The main attributes' Class-Path of a jar's manifest, or '' (the host refuses a nonempty one, dev-host protocol 1). */
-export function manifestClassPath(jar) {
-  const mf = jar.read('META-INF/MANIFEST.MF');
-  if (!mf) return '';
+/**
+ * The jar's manifest main attributes that matter to the launch: Class-Path (the host refuses a nonempty one, dev-host
+ * protocol 1) and Multi-Release. As the JDK reads it: the manifest is found case-insensitively and attribute names are
+ * case-insensitive. A second manifest or a repeated attribute is refused (the JDK keeps the last; nothing is guessed).
+ */
+export function manifestOf(jar, what = 'jar') {
+  const fail = (m) => { throw new JarError(`${what}: ${m}`); };
+  const names = jar.names.filter((n) => n.toUpperCase() === 'META-INF/MANIFEST.MF');
+  if (names.length > 1) fail('more than one manifest');
+  if (!names.length) return { classPath: '', multiRelease: false };
+  const text = jar.read(names[0]).toString('utf8').replace(/\r\n?/g, '\n');
   // Main attributes end at the first empty line; continuation lines start with one space.
-  const main = mf.toString('utf8').replace(/\r\n?/g, '\n').split('\n\n')[0].replace(/\n /g, '');
-  const line = main.split('\n').find((l) => /^class-path:/i.test(l));
-  return line ? line.slice(line.indexOf(':') + 1).trim() : '';
+  const main = text.split('\n\n')[0].replace(/\n /g, '');
+  const attrs = new Map();
+  for (const line of main.split('\n')) {
+    const i = line.indexOf(':');
+    if (i <= 0) continue;
+    const name = line.slice(0, i).trim().toLowerCase();
+    if (attrs.has(name)) fail(`the manifest repeats ${line.slice(0, i).trim()}`);
+    attrs.set(name, line.slice(i + 1).trim());
+  }
+  return { classPath: attrs.get('class-path') ?? '', multiRelease: (attrs.get('multi-release') ?? '').toLowerCase() === 'true' };
 }
