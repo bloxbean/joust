@@ -126,8 +126,8 @@ calls wait for ADR-0023) are shown disabled with the host's code.
 - **Sends and MerkleMaps.** JOUST's shared output and map verifiers are anchored in the pinned build, like the contract's
   own script: a Gradle build's from its snapshot's julc-state-verifier entry, an npm build's from its runtime engine. A
   MerkleMap call's claims and their Merkle Patricia Forestry proofs are checked before signing, as the protocol's
-  reference checker checks them. A send to an identity's key (`ctx.caller()`) lands at its enterprise address, which the
-  identities panel shows beside the identity.
+  reference checker checks them. A send to an identity's key (`ctx.caller()`) lands at its enterprise address, which is the
+  identity's own address, so it shows in the identity's balance.
 - **`@Quorum`.** The call's card lists the other identities as co-signers. The caller approves and signs, then each
   co-signer approves the same checked body and adds its signature. Co-signers are this page's identities (a connected
   CIP-30 wallet cannot be one; sign a quorum call as an identity).

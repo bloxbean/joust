@@ -17,6 +17,9 @@ export function readJar(bytes, what = 'jar') {
     if (bytes.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
   }
   if (eocd < 0) fail('not a zip file');
+  // A ZIP64 end locator just before the end record: the JDK's ZipFile always follows it (to another central directory
+  // perhaps); this reader does not, so such a jar is refused, whatever the end record says.
+  if (eocd >= 20 && bytes.readUInt32LE(eocd - 20) === 0x07064b50) fail('ZIP64 is not supported');
   const count = bytes.readUInt16LE(eocd + 10);
   const size = bytes.readUInt32LE(eocd + 12);
   const offset = bytes.readUInt32LE(eocd + 16);
@@ -41,10 +44,11 @@ export function readJar(bytes, what = 'jar') {
     if (p + 46 + nameLen + extraLen + commentLen > eocd) fail('a central directory record past its end');
     const name = bytes.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
-    // A file name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken. A
-    // directory entry (a name ending in /) has no content: a repeated one is harmless and kept once.
+    // A name twice: which copy a class loader takes is the zip implementation's choice. For a file the launch reads or
+    // the JVM loads (the manifest, JOUST's resources, classes, versioned entries) neither copy is taken; any other repeat
+    // (a directory entry, a licence file) is harmless and its first copy kept.
     if (entries.has(name)) {
-      if (name.endsWith('/')) continue;
+      if (name.endsWith('/') || !/^META-INF\/MANIFEST\.MF$|^META-INF\/(?:joust|plutus|versions)\/|\.class$/i.test(name)) continue;
       fail(`${name} appears twice`);
     }
     entries.set(name, { flags, method, compressed, uncompressed, local });

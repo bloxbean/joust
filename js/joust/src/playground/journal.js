@@ -227,24 +227,32 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
   // #179 r2: each reservation once (two bodies under one id would share one chain observation).
   const intact = parsed !== null && parsed.every(Boolean) && new Set(parsed.map((e) => e.reservation)).size === parsed.length
     && (raw.removedAt === undefined || raw.removedAt === null || isSlot(raw.removedAt))
-    && (raw.rewoundUntil === undefined || raw.rewoundUntil === null || isSlot(raw.rewoundUntil));
+    && (raw.fencedUntil === undefined || raw.fencedUntil === null || isSlot(raw.fencedUntil));
   const lost = (raw !== undefined || highWater !== null) && !intact;
-  let entries = intact ? parsed : [];
-  // The highest tip at which a body left the journal (final or expired): a chain rewound below it may let that body
-  // land again, so a later session fences builds until the tip passes the high-water mark (#179 r2).
-  let removedAt = intact && isSlot(raw.removedAt) ? raw.removedAt : null;
-  // A rewind found below removedAt: nothing is built until a tip strictly above this slot (#179 r3), across restarts.
-  let rewoundUntil = intact && isSlot(raw.rewoundUntil) ? raw.rewoundUntil : null;
+  // The journal's cur. Every change is written first and taken in memory only once the write succeeded (#179 r4): a
+  // failed write changes nothing, so a retry writes again.
+  let cur = {
+    entries: intact ? parsed : [],
+    // The highest chain point at which a body left the journal (final or expired): a chain found below it may let
+    // that body land again.
+    removedAt: intact && isSlot(raw.removedAt) ? raw.removedAt : null,
+    // The one rewind fence (#179 r4): nothing is built until a tip strictly above it; clearing it moves removedAt to
+    // the tip that cleared it, in the same write.
+    fencedUntil: intact && isSlot(raw.fencedUntil) ? raw.fencedUntil : null,
+  };
   let closed = false;
   const mine = () => {
     if (closed || !owns(lockFile, token)) {
       throw Object.assign(new Error('another playground took this project\'s journal on this DevKit'), { code: 'journalTaken' });
     }
   };
-  const save = () => {
+  const commit = (patch) => {
     mine();
-    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, entries, removedAt, rewoundUntil });
+    const next = { ...cur, ...patch };
+    writeAtomic(journalFile, { version: JOURNAL_VERSION, project: root, ...next });
+    cur = next;
   };
+  const later = (a, b) => (a === null ? b : b === null ? a : Math.max(a, b));
 
   return {
     dir,
@@ -255,72 +263,72 @@ export async function openJournal({ root, chain, state = stateRoot(), served = a
       return highWater;
     },
     get entries() {
-      return entries.map((e) => ({ ...e }));
+      return cur.entries.map((e) => ({ ...e }));
+    },
+    get removedAt() {
+      return cur.removedAt;
+    },
+    get fencedUntil() {
+      return cur.fencedUntil;
     },
     find: (reservation) => {
-      const e = entries.find((x) => x.reservation === reservation);
+      const e = cur.entries.find((x) => x.reservation === reservation);
       return e ? { ...e } : null;
     },
-    /** Raises the high-water mark to {@code slot} (never lowers it) and persists it first. */
+    /** Raises the high-water mark to {@code slot} (never lowers it); written before it is taken. */
     raise(slot) {
       if (!isSlot(slot)) throw new Error('journal: the high-water mark is a slot');
       if (highWater !== null && slot <= highWater) return;
       mine();
+      writeAtomic(highFile, { highWater: slot });
       highWater = slot;
-      writeAtomic(highFile, { highWater });
     },
     /** A handed-out body (state prepared); its reservation must be new. */
     record(e) {
       const v = entry({ ...e, state: e.state ?? 'prepared' });
       if (!v) throw new Error('journal: not a valid entry');
-      if (entries.some((x) => x.reservation === v.reservation)) throw new Error('journal: the reservation is already journaled');
-      entries = [...entries, v];
-      save();
+      if (cur.entries.some((x) => x.reservation === v.reservation)) throw new Error('journal: the reservation is already journaled');
+      commit({ entries: [...cur.entries, v] });
     },
     update(reservation, patch) {
-      const i = entries.findIndex((e) => e.reservation === reservation);
+      const i = cur.entries.findIndex((e) => e.reservation === reservation);
       if (i < 0) return false;
-      const v = entry({ ...entries[i], ...patch });
+      const v = entry({ ...cur.entries[i], ...patch });
       if (!v) throw new Error('journal: not a valid entry');
-      entries = entries.with(i, v);
-      save();
+      commit({ entries: cur.entries.with(i, v) });
       return true;
     },
-    get removedAt() {
-      return removedAt;
+    /** Raises the rewind fence to {@code slot} (never lowers it). Throws if it could not be written. */
+    fence(slot) {
+      if (!isSlot(slot)) throw new Error('journal: the fence is a slot');
+      if (cur.fencedUntil !== null && slot <= cur.fencedUntil) return;
+      commit({ fencedUntil: slot });
     },
-    get rewoundUntil() {
-      return rewoundUntil;
-    },
-    /** Persists the rewind bound (raised, never lowered) or, with null, clears it. */
-    setRewound(slot) {
-      if (slot !== null && !isSlot(slot)) throw new Error('journal: the rewind bound is a slot');
-      if (slot !== null && rewoundUntil !== null && slot <= rewoundUntil) return;
-      rewoundUntil = slot;
-      save();
+    /** Clears the fence at a tip strictly above it; removedAt moves to that tip in the same write. */
+    clearFence(tipSlot) {
+      if (cur.fencedUntil === null || !(tipSlot > cur.fencedUntil)) return false;
+      commit({ fencedUntil: null, removedAt: later(cur.removedAt, tipSlot) });
+      return true;
     },
     /**
      * Removes a body; {@code atSlot} is the chain point that settled it (final or expired), kept as the removed-history
      * point (a discarded body needs none: it was never signed).
      */
     remove(reservation, atSlot = null) {
-      const before = entries.length;
-      entries = entries.filter((e) => e.reservation !== reservation);
-      if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
-      if (entries.length !== before) save();
+      const entries = cur.entries.filter((e) => e.reservation !== reservation);
+      if (entries.length === cur.entries.length) return;
+      commit({ entries, removedAt: isSlot(atSlot) ? later(cur.removedAt, atSlot) : cur.removedAt });
     },
     /**
      * Replaces the whole journal (after a restore: the host's new reservation ids); nothing changes if one is invalid.
-     * {@code atSlot}: the chain point at which history the restore dropped settled, saved in the same write (#179 r3).
+     * {@code atSlot}: the chain point at which history the restore dropped settled, saved in the same write.
      */
     replace(list, atSlot = null) {
       const next = list.map(entry);
       if (!next.every(Boolean) || new Set(next.map((e) => e.reservation)).size !== next.length) {
         throw new Error('journal: the restored entries are not valid');
       }
-      entries = next;
-      if (atSlot !== null && isSlot(atSlot) && (removedAt === null || atSlot > removedAt)) removedAt = atSlot;
-      save();
+      commit({ entries: next, removedAt: isSlot(atSlot) ? later(cur.removedAt, atSlot) : cur.removedAt });
     },
     /** The keyed operation records on this chain (a list; an unreadable file reads as none, never as a guess). */
     get operations() {

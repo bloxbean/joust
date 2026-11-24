@@ -109,15 +109,22 @@ test('Plutus data as the pinned JuLC decoder reads it: byte strings of at most 6
 test('constructor indices beyond safe integers fail closed (the data model would equate distinct ones)', async () => {
   const { plutusData } = await import('../src/hostcheck.js');
   const { decodeData, dataEqual } = await import('../src/pdata.js');
-  const general = (n) => 'd86682' + '1b' + n.toString(16).padStart(16, '0') + '80';
+  const word = (n) => '1b' + n.toString(16).padStart(16, '0');
+  const definite = (n) => 'd86682' + word(n) + '80';
+  const indefinite = (n) => 'd8669f' + word(n) + '80ff';
   const two53 = 2n ** 53n;
-  // The hazard: the lenient decoder makes 2^53 and 2^53 + 1 the same constructor.
-  assert.equal(dataEqual(decodeData(general(two53)), decodeData(general(two53 + 1n))), true);
-  // The checker refuses both (JuLC would accept them: the one place it is stricter, documented), and keeps a safe one.
-  assert.throws(() => plutusData(general(two53)));
-  assert.throws(() => plutusData(general(two53 + 1n)));
-  assert.throws(() => plutusData(general(2n ** 64n - 1n)));
-  assert.equal(plutusData(general(2n ** 53n - 1n)).constr, Number.MAX_SAFE_INTEGER);
+  // Both encodings, through the shared decoder (decodeData, behind dataEqual and verifyPrepared) and the checker's:
+  // an index the data model cannot hold exactly is refused before conversion, so 2^53 and 2^53 + 1 never compare
+  // equal (JuLC would accept them: the one place these decoders are stricter, documented); a safe one is kept.
+  for (const enc of [definite, indefinite]) {
+    for (const n of [two53, two53 + 1n, 2n ** 64n - 1n]) {
+      assert.throws(() => decodeData(enc(n)), /beyond/);
+      assert.throws(() => plutusData(enc(n)));
+    }
+    assert.equal(decodeData(enc(two53 - 1n)).constr, Number.MAX_SAFE_INTEGER);
+    assert.equal(plutusData(enc(two53 - 1n)).constr, Number.MAX_SAFE_INTEGER);
+    assert.equal(dataEqual(decodeData(enc(two53 - 1n)), decodeData(enc(two53 - 2n))), false);
+  }
 });
 
 test('an output address that does not round-trip to its received bytes is refused (a pointer with trailing bytes)', async () => {

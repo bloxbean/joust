@@ -75,14 +75,24 @@ async function devkitNetwork(config, networkName, log) {
  * page pairs. Only a printed link (--no-open, or no browser could be asked) shows a code, and it pairs one page. The
  * same for npm and Gradle projects.
  */
-async function announce(start, { open, log, mode }) {
+export async function announce(start, { open, log, mode, spawnOpener = spawn }) {
   let launcher = null;
-  const server = await start({ onPaired: () => launcher?.remove() });
+  let paired = false;
+  let fellBack = false;
+  const server = await start({ onPaired: () => { paired = true; launcher?.remove(); } });
   const printed = (why) => {
     log(`  ${why}: ${server.pairingUrl()}`);
     log('  (a single-use link, valid ten minutes: it pairs one page; run joust playground again for another)');
   };
-  launcher = open ? openBrowser(server.pairingUrl(), () => { launcher?.remove(); printed('no browser could be opened; open this link'); }) : null;
+  // The opener failed to start, or started and failed (xdg-open with no browser exits non-zero): one fresh link,
+  // unless the page paired meanwhile.
+  const failed = () => {
+    if (fellBack || paired) return;
+    fellBack = true;
+    launcher?.remove();
+    printed('no browser could be opened; open this link');
+  };
+  launcher = open ? openBrowser(server.pairingUrl(), failed, spawnOpener) : null;
   if (launcher) {
     log(`joust playground (${mode}): http://127.0.0.1:${server.port}/ (opened in your browser)`);
     log('  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link');
@@ -140,13 +150,14 @@ export function writeLauncher(url) {
 }
 
 /** Opens the URL through a launcher file; null if no browser could be asked. */
-function openBrowser(url, failed) {
+function openBrowser(url, failed, spawnOpener = spawn) {
   let launcher;
   try {
     launcher = writeLauncher(url);
     const [cmd, args] = process.platform === 'darwin' ? ['open', [launcher.link]]
       : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', launcher.link]] : ['xdg-open', [launcher.link]];
-    spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', failed).unref();
+    spawnOpener(cmd, args, { stdio: 'ignore', detached: true }).on('error', failed)
+      .on('exit', (code, signal) => { if (code !== 0 || signal) failed(); }).unref();
     // Removed when the page pairs, after ten minutes (the code's life), or when the playground stops.
     setTimeout(launcher.remove, 600_000).unref();
     return launcher;

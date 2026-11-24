@@ -93,6 +93,11 @@ final class Playground {
         String h = sys.env().get(HOME_ENV);
         if (h != null && !h.isBlank()) {
             if (!Path.of(h).isAbsolute()) throw new Refused(HOME_ENV + " must be an absolute path");
+            // `..` after a link means the link target's parent to the file system, but normalising would drop both: the
+            // cache would be checked in one directory and used in another. Refused rather than resolved.
+            for (Path part : Path.of(h)) {
+                if (part.toString().equals("..")) throw new Refused(HOME_ENV + " must not contain `..`: give the directory itself");
+            }
             return Path.of(h);
         }
         String user = sys.env().getOrDefault("HOME", System.getProperty("user.home"));
