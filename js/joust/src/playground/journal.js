@@ -104,8 +104,12 @@ function alive(pid) {
 
 /** M3-S2: a directory of this user's, not writable by others (made 0700 when it is this user's); else refused. */
 function privateDir(dir) {
-  const made = mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (made !== undefined) syncDir(dirname(made));   // a new directory made durable in its parent
+  // Every directory this creates (a first run makes ~/.joust, its state, chains, …) is made durable in its parent,
+  // before any journal write can be acknowledged (final pass): else a crash could lose the whole state directory.
+  const missing = [];
+  for (let p = dir; !existsSync(p) && dirname(p) !== p; p = dirname(p)) missing.push(p);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const p of missing.reverse()) syncDir(dirname(p));
   const st = lstatSync(dir);
   if (!st.isDirectory()) throw new Error(`journal: ${dir} is not a directory`);
   const uid = process.getuid?.();

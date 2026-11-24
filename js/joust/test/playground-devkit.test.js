@@ -445,6 +445,32 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     assert.ok(synced.length >= 4, `two writes, each the file and its directory: ${synced.length} fsyncs`);
   });
 
+  test('final pass (Codex): a first run makes every directory it creates durable in its parent', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'joust-first-run-')));
+    const deep = join(base, 'home', '.joust', 'state');   // three missing ancestors, then chains/ and the chain's own
+    const opened = [];
+    const original = fs.openSync;
+    fs.openSync = (path, flags, ...rest) => { if (flags === 'r') opened.push(String(path)); return original(path, flags, ...rest); };
+    syncBuiltinESMExports();
+    let j;
+    try {
+      j = await openJournal({ root: '/p/first', chain: identity(18), state: deep });
+    } finally {
+      fs.openSync = original;
+      syncBuiltinESMExports();
+    }
+    try {
+      for (const parent of [base, join(base, 'home'), join(base, 'home', '.joust'), deep, join(deep, 'chains')]) {
+        assert.ok(opened.includes(parent), `${parent} synced (${opened.join(', ')})`);
+      }
+    } finally {
+      j.close();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('FD4: a lock held by a running playground is refused naming its file', async () => {
     const j = await open('/p/held', 17);
     try {
