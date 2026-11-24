@@ -542,9 +542,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
         }
         report.submitted = true;
         record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
-        note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)`, 'ok');
-        if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
-        for (const a of res.acceptedAttacks) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
+        confirmedNotes(label, res);
         await refresh();
         resolve(res);
       } catch (e) {
@@ -606,6 +604,13 @@ async function reconcile(txHash, session = state.session.session, tries = 3) {
   return null;
 }
 
+/** What a confirmation tells, immediate or rechecked: its slot, a settlement the host did not take, accepted attacks. */
+function confirmedNotes(label, res, how = '') {
+  note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)${how}`, 'ok');
+  if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
+  for (const a of res.acceptedAttacks ?? []) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
+}
+
 /** An "outcome unknown" entry, checked again against its session's history and updated in place. */
 async function recheck(entry) {
   const res = await reconcile(entry.txHash, entry.session, 1);
@@ -616,7 +621,7 @@ async function recheck(entry) {
   Object.assign(entry, { outcome: 'confirmed', slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks,
     message: `confirmed in slot ${res.slot} (rechecked)` });
   drawHistory();
-  note(`${entry.label}: confirmed in slot ${res.slot} (${entry.txHash.slice(0, 16)}…), rechecked`, 'ok');
+  confirmedNotes(entry.label, { ...res, txHash: entry.txHash }, ', rechecked');
   await refresh();
 }
 

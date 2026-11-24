@@ -656,9 +656,18 @@ for (const kind of ['java', 'jsc']) {
       await page.unroute('**/api/history');
       errors.splice(0, errors.length, ...errors.filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
       const entries = await page.locator('#history li').count();
+      // The session's record says the host did not take the settlement: the recheck warns as a confirmation does.
+      await page.route('**/api/history', async (route) => {
+        const response = await route.fetch();
+        const j = await response.json();
+        for (const e of j.result ?? []) e.settlement = 'the dev host ended';
+        await route.fulfill({ response, json: j });
+      });
       await page.locator('#history button.recheck').first().click();
       await page.waitForFunction(() => /confirmed in slot \d+ \(rechecked\)/.test(document.querySelector('#history').innerText));
+      await page.unroute('**/api/history');
       assert.equal(await page.locator('#history li').count(), entries, 'the entry is updated in place, not added');
+      assert.match(await page.locator('#log').innerText(), /did not take the settlement \(the dev host ended\): start a new session/);
       await page.waitForFunction(() => /"count": "10"/.test(document.querySelector('#instances li.selected pre')?.textContent ?? ''));
       // The answer and the request lost: the outcome is unknown (not a retryable failure), and the body is not released.
       await page.route('**/api/submit', (route) => route.abort('connectionreset'));
