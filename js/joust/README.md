@@ -81,8 +81,10 @@ A two-identity Counter walkthrough:
 6. **Advance time** moves the ledger's clock. **Reset ledger** starts a new ledger and dev host with the same identities.
 
 How it works: the playground server launches the project's dev host (`joust-host --stdio`, protocol 1) and answers its
-chain reads from the ledger. The page renders what the host describes, checks every body itself with the page verifier
-(publications included) before an identity signs it, and asks the server to submit. Keys never leave the page: the
+chain reads from the ledger. The page renders what the host describes, checks every body itself before an identity signs it
+(protocol 1's D13 rules, as the conformance kit's reference checker decides them: `verifyHostResult` in
+`@julclang/state-client`, plus the page verifier; publications included), shows for review what the body itself says
+(fee, what the signer pays in all, validity, signers, outputs), and asks the server to submit. Keys never leave the page: the
 server learns addresses only. A reload starts a new session with new identities.
 
 The server listens on `127.0.0.1` only. Every request needs a per-run session token, and requests with another `Host`
@@ -97,9 +99,10 @@ try DevKit"), and does not model rewards or collateral loss.
 
 Supported in this version: init, actions, destroy and owned calls; argument forms for integers, bytes (with a UTF-8
 helper and identities' key hashes), Bool, Optional, records and sum types, lists, maps with integer or byte-string keys,
-and Values. Anything else (untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls
-the dev host refuses (`keyed`, `params`, `authorizedBy`, `unverifiable`), `@Quorum` co-signing and calls that need a
-shared verifier (sends, MerkleMaps) are shown disabled.
+and Values, and an asset offer for calls that take assets (`<policy>.<asset name> <quantity>` per line). Anything else
+(untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls the dev host refuses
+(`keyed`, `params`, `authorizedBy`, `unverifiable`), keyed contracts, `@Quorum` co-signing and calls that need a shared
+verifier (sends, MerkleMaps) are shown disabled.
 
 ## `joust dev`
 

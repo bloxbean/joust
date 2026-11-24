@@ -4,13 +4,13 @@
 //
 // Every string from the project or the chain is rendered as text (textContent), never as HTML (D8).
 
-import { verifyPrepared, verifyPublication, plutusScriptHash, enterpriseAddress, baseAddress, parseTx }
-  from '@julclang/state-client';
+import { verifyPrepared, verifyPublication, publicationExpectation, parseTx } from '@julclang/state-client';
 import { devWallet } from '@julclang/state-client/devwallet';
 import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
+import { anchorsOf, checkCall as hostCheck, checkPublication } from './check.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -218,31 +218,23 @@ async function selectContract(name) {
   const r = await sapi('contract', { contract: name });
   // The anchors come from the build this session pinned (the server's copy of the bytes the fingerprint covers), never
   // from the host's claims (ADR-0022 D13 rule 2).
-  const unwrapped = unwrapScript(r.script);
-  const hash = plutusScriptHash(unwrapped, 3);
+  const anchors = anchorsOf(r);
+  const { policy: hash, address } = anchors;
   const x = r.description['x-joust'] ?? {};
-  // A stakeSelf contract's address is a base address whose stake credential is its own script (ADR-0010).
-  const script = { type: 'script', hash };
-  const address = x.stakeSelf === true ? baseAddress(script, script, 0) : enterpriseAddress(script, 0);
   const deployment = await sapi('deployment', { contract: name });
   const needsVerifier = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends) || !!x.maps?.length;
   if (deployment.scriptHashes?.spend !== hash || deployment.addresses?.contract !== address) {
     throw new StageFailure({ stage: 'verification', code: 'deployment',
       message: 'the dev host\'s deployment differs from the build this session pinned: start a new session' });
   }
+  // Keyed contracts (ADR-0016) need the page's designated input and operation records: they arrive with M4.
+  const keyed = Array.isArray(x.keyed) ? x.keyed.length > 0 : !!x.keyed && Object.keys(x.keyed).length > 0;
   state.contract = { name, describe: r.describe, description: r.description, script: r.script,
-    anchors: { description: r.description, policy: hash, address, language: 'PlutusScriptV3' }, deployment, needsVerifier };
+    anchors, deployment, needsVerifier, keyed };
   state.instance = null;
-  $('contract-title').textContent = name;
+  $('contract-title').replaceChildren(h('span', { text: name }), ' ', h('code', { class: 'muted', title: 'the contract address (derived from the pinned build)', text: address }));
   await drawInstances();
   drawOperations();
-}
-function unwrapScript(hex) {
-  // contracts.json's script is the CBOR byte string of the flat-encoded program's CBOR (the double-wrapped form):
-  // the script hash is over the inner one.
-  const head = parseInt(hex.slice(0, 2), 16);
-  const skip = head === 0x59 ? 6 : head === 0x58 ? 4 : head === 0x5a ? 10 : head >= 0x40 && head < 0x58 ? 2 : 0;
-  return hex.slice(skip);
 }
 
 async function drawInstances() {
@@ -251,6 +243,11 @@ async function drawInstances() {
   let listing;
   try {
     listing = await sapi('instances', { contract: c.name, limit: 50 });
+    // Every page of the listing (at most 20), through the listing's own `next`.
+    for (let i = 0; listing.next !== null && listing.next !== undefined && listing.listing && i < 20; i++) {
+      const more = await sapi('page', { method: 'instances', listing: listing.listing, after: listing.next, limit: 50 });
+      listing = { ...more, items: [...listing.items, ...more.items] };
+    }
   } catch (e) {
     box.replaceChildren(h('p', { class: 'error', text: `instances: ${e.message}` }));
     return;
@@ -307,6 +304,7 @@ function drawOperations() {
     if (!reason && !meta) reason = 'unsupported: not in the description';
     if (!reason && meta.policies?.quorum) reason = 'unsupported: @Quorum co-signing arrives with M4';
     if (!reason && c.needsVerifier) reason = 'unsupported: calls with a shared verifier (sends, maps) are not signed in M1';
+    if (!reason && c.keyed) reason = 'unsupported: keyed contracts (designated inputs) arrive with M4';
     const card = h('div', { class: 'operation' + (reason ? ' disabled' : ''), 'data-call': `${call.kind}:${call.method}` },
       h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: call.kind })));
     box.append(card);
@@ -325,13 +323,18 @@ function drawOperations() {
       payInput = h('input', { type: 'text', placeholder: 'lovelace', 'data-kind': 'pay' });
       form.append(h('div', { class: 'field' }, h('label', { text: 'pay (lovelace)' }), payInput));
     }
+    let assetsInput = null;
+    if (meta.takesAssets) {
+      assetsInput = h('textarea', { rows: 2, placeholder: 'one per line: <policy hex>.<asset name hex> <quantity>', 'data-kind': 'assets' });
+      form.append(h('div', { class: 'field' }, h('label', { text: 'pay (assets)' }), assetsInput));
+    }
     let objectInput = null;
     if (NEEDS_OBJECT.has(call.kind)) {
       objectInput = h('input', { type: 'text', placeholder: 'object id (hex)', 'data-kind': 'object' });
       form.append(h('div', { class: 'field' }, h('label', { text: 'object' }), objectInput));
     }
     const go = h('button', { class: 'run', text: 'Review…', disabled: bad.length > 0 || (NEEDS_INSTANCE.has(call.kind) && !state.instance),
-      onclick: () => guard(() => run(call, meta, { getters, controls, payInput, objectInput })) });
+      onclick: () => guard(() => run(call, meta, { getters, controls, payInput, assetsInput, objectInput })) });
     card.append(go);
     if (bad.length) card.append(h('span', { class: 'badge', text: 'UNSUPPORTED argument types: ' + bad.map((u) => u.path).join(', ') }));
     if (NEEDS_INSTANCE.has(call.kind) && !state.instance) card.append(h('span', { class: 'muted', text: ' choose an instance first' }));
@@ -354,6 +357,10 @@ async function run(call, meta, form) {
       if (!/^\d+$/.test(t)) throw new FormError('pay', 'lovelace: digits');
       pay = { lovelace: t };
     }
+    if (form.assetsInput) {
+      const assets = offeredAssets(form.assetsInput.value);
+      pay = { lovelace: pay?.lovelace ?? '0', assets };
+    }
   } catch (e) {
     throw new StageFailure({ stage: 'arguments', code: 'form', message: e.message, label });
   }
@@ -370,24 +377,56 @@ async function run(call, meta, form) {
   } catch (e) {
     throw labelled(e, 'host', label);
   }
-  // 3. check (stage verification)
-  const problems = await checkCall(r, request, meta, signer);
-  if (problems.length) {
-    await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
-    throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign: ' + problems.join('; '), label });
+  // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws) releases
+  // the reservation; the server ignores a release of one it already settled.
+  let report;
+  try {
+    // 3. check (stage verification)
+    const checked = await checkCall(r, request, meta, signer);
+    if (checked.problems.length) {
+      throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign: ' + checked.problems.join('; '), label });
+    }
+    report = checked.report;
+    // 4. review, 5. sign, 6. submit, 7. settle
+    await reviewSignSubmit(r, label, signer, { predicted: r.predicted, request, report });
+  } finally {
+    if (!report?.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
   }
-  // 4. review, 5. sign, 6. submit, 7. settle
-  await reviewSignSubmit(r, label, signer, { predicted: r.predicted, request });
-  if (call.kind === 'init' && r.prepared.instance) state.instance = r.prepared.instance;
+  // The created instance as the body makes it (the checker derived it from the seed), not the host's claim.
+  if (call.kind === 'init' && report.created) state.instance = report.created;
   await drawInstances();
   drawOperations();
 }
 
+/** The offered assets (`pay.assets`): [[policy, [[name, quantity]…]]…], policies and names in canonical CBOR order. */
+function offeredAssets(text) {
+  const canonical = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+  const by = new Map();
+  for (const line of text.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    const m = /^([0-9a-f]{56})\.((?:[0-9a-f]{2}){0,32})\s+([0-9]{1,20})$/.exec(line.toLowerCase());
+    if (!m) throw new FormError('pay.assets', `"${line}": expected <policy hex>.<asset name hex> <quantity>`);
+    if (BigInt(m[3]) <= 0n) throw new FormError('pay.assets', `"${line}": the quantity must be positive`);
+    const names = by.get(m[1]) ?? new Map();
+    if (names.has(m[2])) throw new FormError('pay.assets', `"${line}": named twice`);
+    names.set(m[2], BigInt(m[3]).toString());
+    by.set(m[1], names);
+  }
+  return [...by].sort(([a], [b]) => canonical(a, b)).map(([p, names]) => [p, [...names].sort(([a], [b]) => canonical(a, b))]);
+}
+
+/**
+ * The page's check of a prepared call (D7 step 3, I2): protocol 1's D13 rules (verifyHostResult, the conformance kit's
+ * reference checker) over the body, the request the page sent, the pinned anchors and the trusted chain's outputs and
+ * parameters; and the page verifier besides. Either refusing refuses. The report (what the review shows) is the
+ * checker's: read from the body, never from the host's claims.
+ */
 async function checkCall(r, request, meta, signer) {
   const c = state.contract;
   const params = await sapi('protocolParams');
+  const { snapshots, outputs } = await resolveInputs(r.prepared.cbor);
+  const host = hostCheck({ result: r, request, anchors: c.anchors, snapshots, params, maxFee: MAX_FEE });
+  if (host.problems.length) return { problems: host.sites };
   const walletUtxos = new Map((await chainView.utxosAt(signer.address)).map((u) => [u.ref, u]));
-  const outputs = await resolveInputs(r.prepared.cbor);
   const { problems } = await verifyPrepared({
     description: c.description, txHex: r.prepared.cbor,
     // No slotConfig: offline time is the ledger's slot (advance moves it), not the wall clock; the session's now is
@@ -398,17 +437,20 @@ async function checkCall(r, request, meta, signer) {
     chain: { tip: r.now, params, utxo: async (ref) => outputs.get(ref) ?? null },
     limits: { maxFee: MAX_FEE, maxValiditySlots: r.ttlSlots, maxStartSlots: 60, maxBackdateSlots: 0 },
   });
-  // The body's hash is the hash the identity signs (ADR-0022 D13 rule 1).
-  const tx = parseTx(r.prepared.cbor);
-  if (tx.hash !== r.prepared.txHash) problems.push('the body\'s hash is not the host\'s txHash');
-  return problems;
+  return { problems, report: host.report };
 }
 
+/** The trusted chain's outputs for every input, reference input and collateral input of a body (none if unreadable). */
 async function resolveInputs(cbor) {
-  const tx = parseTx(cbor);
+  let tx;
+  try {
+    tx = parseTx(cbor);
+  } catch {
+    return { snapshots: {}, outputs: new Map() };
+  }
   const refs = [...new Set([...tx.inputs, ...tx.referenceInputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
-  const snaps = await sapi('outputs', { refs });
-  return new Map(Object.entries(snaps).map(([ref, u]) => [ref, snapToUtxo(u)]));
+  const snapshots = refs.length ? await sapi('outputs', { refs: refs.slice(0, 256) }) : {};
+  return { snapshots, outputs: new Map(Object.entries(snapshots).map(([ref, u]) => [ref, snapToUtxo(u)])) };
 }
 
 async function prerequisites(signer) {
@@ -425,26 +467,37 @@ async function prerequisites(signer) {
       throw labelled(e, 'host', label);
     }
     if (!r?.prepared) continue;
-    const params = await sapi('protocolParams');
-    const outputs = await resolveInputs(r.prepared.cbor);
-    const v = await verifyPublication({ prepared: r.prepared, prerequisite: p, anchors: c.anchors, contract: c.name, payer: signer.address,
-      networkId: 0, now: r.now, ttlSlots: r.ttlSlots,
-      chain: { params, utxo: async (ref) => outputs.get(ref) ?? null,
-        scriptsAt: async (addr) => (await sapi('utxos', { address: addr })).map((u) => u.reference_script_hash).filter(Boolean),
-        registration: async (scriptHash) => sapi('registered', { scriptHash }) },
-      limits: { maxFee: MAX_FEE } });
-    if (v.problems.length) {
-      await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
-      throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign the publication: ' + v.problems.join('; '), label });
+    const report = {};
+    try {
+      const params = await sapi('protocolParams');
+      const { snapshots, outputs } = await resolveInputs(r.prepared.cbor);
+      const scriptsAt = async (addr) => (await sapi('utxos', { address: addr })).map((u) => u.reference_script_hash).filter(Boolean);
+      const registration = async (scriptHash) => sapi('registered', { scriptHash });
+      // The reference checker's view of the chain: the scripts at the holder, the credential's registration.
+      const { expected } = publicationExpectation({ prerequisite: p, anchors: c.anchors, networkId: 0 });
+      const hash = String(p.id ?? p).split(':')[1] ?? '';
+      const node = { scriptsAt: {}, registrations: {} };
+      if (expected?.target) node.scriptsAt[expected.target] = await scriptsAt(expected.target);
+      if (/^[0-9a-f]{56}$/.test(hash)) node.registrations[hash] = await registration(hash);
+      const host = checkPublication({ result: r, contract: c.name, prerequisite: p.id, address: signer.address, anchors: c.anchors,
+        snapshots, node, params, maxFee: MAX_FEE });
+      const v = host.problems.length ? { problems: host.sites } : await verifyPublication({ prepared: r.prepared, prerequisite: p,
+        anchors: c.anchors, contract: c.name, payer: signer.address, networkId: 0, now: r.now, ttlSlots: r.ttlSlots,
+        chain: { params, utxo: async (ref) => outputs.get(ref) ?? null, scriptsAt, registration }, limits: { maxFee: MAX_FEE } });
+      if (v.problems.length) {
+        throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign the publication: ' + v.problems.join('; '), label });
+      }
+      Object.assign(report, host.report);
+      await reviewSignSubmit(r, label, signer, { publication: p, report });
+    } finally {
+      if (!report.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
     }
-    await reviewSignSubmit(r, label, signer, { publication: p });
   }
   throw new StageFailure({ stage: 'host', code: 'prerequisite', message: 'the prerequisites did not settle' });
 }
 
-function reviewSignSubmit(r, label, signer, { predicted, request, publication }) {
+function reviewSignSubmit(r, label, signer, { predicted, request, publication, report }) {
   return new Promise((resolve, reject) => {
-    const tx = parseTx(r.prepared.cbor);
     const panel = $('review');
     const done = (fn) => (...a) => { panel.hidden = true; panel.replaceChildren(); fn(...a); };
     const approve = done(async () => {
@@ -462,8 +515,11 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication })
         try {
           res = await sapi('submit', { reservation: r.prepared.reservation, cbor: signed.cbor });
         } catch (e) {
+          // The server settled the reservation (a ledger refusal is discarded there).
+          report.submitted = true;
           throw labelled(e, 'ledger', label);
         }
+        report.submitted = true;
         record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
         note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)`, 'ok');
         if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
@@ -475,18 +531,22 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication })
       }
     });
     const decline = done(async () => {
-      await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
       record({ label, outcome: 'declined' });
       note(`${label}: declined; the body was discarded`);
       reject(Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: 'declined at review', label }), { quiet: true }));
     });
+    // Everything here is read from the body and the trusted chain by the checks (report), not from the host.
+    const { plan, walletNet, signers } = report;
+    const net = Object.entries(walletNet ?? {}).map(([unit, q]) => (unit === 'lovelace' ? ada(q) : `${q} ${unit}`)).join(', ') || 'nothing';
     const lines = [
       ['signer', `${signer.label} (${signer.keyHash})`],
       ['transaction', r.prepared.txHash],
-      ['fee', ada(tx.fee)],
-      ['validity', `${r.prepared.validFrom ?? '-'} … ${r.prepared.validTo} (exclusive), now ${r.now}`],
-      ['required signers', (r.prepared.signers ?? []).join(', ') || 'none'],
-      ['scripts run', String(tx.redeemers?.length ?? 0)],
+      ['fee', ada(plan.fee)],
+      [`${signer.label} pays in all`, net],
+      ['validity', `${plan.validFrom ?? '-'} … ${plan.validTo ?? '-'} (exclusive), now ${r.now}`],
+      ['signers', signers.join(', ') || 'none'],
+      ['scripts run', String(plan.redeemers.length)],
+      ['outputs', plan.outputs.map((o) => `${o.address.slice(0, 24)}… ${ada(o.value.lovelace)}${Object.keys(o.value).length > 1 ? ` + ${Object.keys(o.value).length - 1} asset(s)` : ''}${o.datum ? ' (datum)' : ''}`).join('\n')],
     ];
     panel.replaceChildren(
       h('h3', { text: publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}` }),
@@ -509,7 +569,8 @@ function currentState() {
 function drawHistory() {
   $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: e.outcome === 'confirmed' ? 'ok' : e.outcome === 'declined' ? '' : 'error' },
     h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
-    e.code ? h('code', { text: ` ${e.code}` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
+    e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
+    e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
     e.sites?.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
     e.txHash ? h('div', {}, h('code', { text: e.txHash })) : null,
     e.attacks !== undefined ? h('div', { class: e.accepted?.length ? 'warn' : 'muted',
@@ -527,7 +588,8 @@ async function guard(fn) {
     if (!e.quiet) {
       const notModelled = e.code === 'NotModelled' || e.notModelled;
       const message = notModelled ? `not modelled offline: try DevKit (${e.message})` : e.message;
-      record({ label: e.label ?? 'request', outcome: 'failed', stage: e.stage ?? 'server', code: e.code, message, sites: e.sites });
+      record({ label: e.label ?? 'request', outcome: 'failed', stage: e.stage ?? 'server', code: e.code, kind: e.kind, retryAtSlot: e.retryAtSlot,
+        message, sites: e.sites });
       note(`${e.label ?? 'request'} failed at stage ${e.stage ?? 'server'}${e.code ? ` (${e.code})` : ''}: ${message}`, 'error');
     }
     await refresh().catch(() => {});

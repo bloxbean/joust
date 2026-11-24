@@ -16,6 +16,7 @@ import { offlineSession, ledgerReads } from '../src/playground/session.js';
 import { startPlayground, TOKEN_HEADER } from '../src/playground/server.js';
 import { launchNpmHost } from '../src/playground/host.js';
 import { classify, encode, unsupportedPaths, canonicalPairs } from '../playground/form.js';
+import { anchorsOf, checkCall, checkPublication } from '../playground/check.js';
 
 const images = existsSync(join(repo, 'js/joust/engine/joust-toolchain.js.wasm'))
   && existsSync(join(repo, 'js/joust-runtime/engine/joust-runtime.js.wasm'));
@@ -193,6 +194,69 @@ describe('ADR-0024 M1 sessions', { skip }, () => {
       }
     } finally {
       rmSync(r2, { recursive: true, force: true });
+    }
+  });
+
+  test('I2: the page\'s pre-sign check accepts the host\'s bodies and refuses tampered results', async () => {
+    const s = await offlineSession({ id: 's1', root, engine: await theEngine() });
+    try {
+      const alice = (await wallet()).w;
+      s.fund(alice.address, 1_000_000_000n);
+      const entry = s.entries.find((e) => JSON.parse(e.description).preamble?.title === COUNTER);
+      const anchors = anchorsOf({ description: JSON.parse(entry.description), script: entry.script });
+      const params = await s.protocolParams();
+      const { parseTx } = await import('@julclang/state-client');
+      const snapshotsOf = async (cbor) => {
+        const tx = parseTx(cbor);
+        return s.outputs([...new Set([...tx.inputs, ...tx.referenceInputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref)))]);
+      };
+      const tamper = (r, change) => { const c = structuredClone(r); change(c.prepared); return c; };
+      // The publications: each accepted as the host prepared it; a claimed signer set or window that the body does not
+      // have is refused.
+      for (const p of await s.prerequisites(COUNTER)) {
+        const r = await s.publish(COUNTER, p.id, alice.address);
+        const hash = p.id.split(':')[1];
+        const node = { scriptsAt: { [anchors.address]: [] }, registrations: { [hash]: await s.registered(hash) } };
+        const args = { contract: COUNTER, prerequisite: p.id, address: alice.address, anchors, snapshots: await snapshotsOf(r.prepared.cbor),
+          node, params, maxFee: 5_000_000n };
+        assert.deepEqual(checkPublication({ ...args, result: r }).sites, []);
+        assert.ok(checkPublication({ ...args, result: tamper(r, (x) => { x.signers = []; }) }).problems.includes('planMismatch'));
+        assert.ok(checkPublication({ ...args, result: tamper(r, (x) => { x.validTo += 1; }) }).problems.includes('planMismatch'));
+        assert.ok(checkPublication({ ...args, node: { ...node, scriptsAt: { [anchors.address]: [hash] } }, result: r }).problems
+          .includes('publicationPresence'), 'a script already at its holder is not published again');
+        await s.submit(r.prepared.reservation, await signed(alice, r.prepared));
+      }
+      const initCall = { contract: COUNTER, kind: 'init', method: 'init', address: alice.address, args: {} };
+      const init = await s.prepare(initCall);
+      const checked = checkCall({ result: init, request: initCall, anchors, snapshots: await snapshotsOf(init.prepared.cbor), params, maxFee: 5_000_000n });
+      assert.deepEqual(checked.sites, []);
+      assert.equal(checked.report.created, init.prepared.instance, 'the created id comes from the body');
+      await s.submit(init.prepared.reservation, await signed(alice, init.prepared));
+      const instance = checked.report.created;
+      const call = { contract: COUNTER, kind: 'action', method: 'increment', instance, address: alice.address, args: { by: '2' } };
+      const inc = await s.prepare(call);
+      const base = { request: call, anchors, snapshots: await snapshotsOf(inc.prepared.cbor), params, maxFee: 5_000_000n };
+      const ok = checkCall({ ...base, result: inc });
+      assert.deepEqual(ok.sites, []);
+      assert.equal(ok.report.walletNet.lovelace, ok.report.plan.fee, 'an increment costs Alice its fee');
+      const refused = (o, code) => assert.ok(checkCall(o).problems.includes(code), `${code}: ${checkCall(o).sites.join('; ')}`);
+      refused({ ...base, result: tamper(inc, (x) => { x.txHash = 'ee'.repeat(32); }) }, 'bodyHash');
+      refused({ ...base, result: tamper(inc, (x) => { x.signers = []; }) }, 'planMismatch');
+      refused({ ...base, result: tamper(inc, (x) => { x.plan.fee = '1'; }) }, 'planMismatch');
+      refused({ ...base, request: { ...call, args: { by: '3' } }, result: inc }, 'redeemer');
+      refused({ ...base, request: { ...call, address: (await wallet()).w.address }, result: inc }, 'scriptInput');
+      refused({ ...base, maxFee: 1n, result: inc }, 'fee');
+      refused({ ...base, anchors: { ...anchors, policy: 'ab'.repeat(28) }, result: inc }, 'scriptInput');
+      // A body the host altered after reserving it (another output value): not the body it described.
+      const bytes = inc.prepared.cbor;
+      const at = bytes.indexOf(inc.prepared.plan.fee === undefined ? 'zz' : BigInt(inc.prepared.plan.fee).toString(16).padStart(8, '0'));
+      if (at > 0) {
+        const altered = bytes.slice(0, at) + (BigInt(inc.prepared.plan.fee) + 1n).toString(16).padStart(8, '0') + bytes.slice(at + 8);
+        assert.ok(checkCall({ ...base, result: tamper(inc, (x) => { x.cbor = altered; }) }).problems.length > 0);
+      }
+      await s.discard(inc.prepared.reservation);
+    } finally {
+      await s.close();
     }
   });
 
@@ -507,7 +571,7 @@ for (const kind of ['java', 'jsc']) {
       const { wordlist } = await import('@scure/bip39/wordlists/english');
       const words = new Set(wordlist);
       const allowed = new Set(['session', 'contract', 'call', 'address', 'lovelace', 'ms', 'refs', 'reservation', 'cbor', 'prerequisite',
-        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum']);
+        'instance', 'limit', 'enabled', 'keepLedgerOf', 'attacks', 'view', 'args', 'listing', 'after', 'method', 'datum', 'scriptHash']);
       assert.ok(bodies.length > 10);
       for (const { url, body } of bodies) {
         const json = JSON.parse(body || '{}');
