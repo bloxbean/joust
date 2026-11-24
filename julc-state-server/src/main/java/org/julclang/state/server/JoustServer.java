@@ -5,11 +5,15 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.julclang.state.api.RequireException;
+import org.julclang.state.runtime.CallAbort;
 import org.julclang.state.runtime.Compose;
 import org.julclang.state.runtime.JoustException;
 import org.julclang.state.runtime.PreparedTx;
+import org.julclang.state.runtime.StateContractHandle;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
+import org.julclang.state.serve.BadRequest;
+import org.julclang.state.serve.ServedContract;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -94,8 +98,8 @@ public final class JoustServer {
 
         /** Serves the contract of a generated {@code <Name>Client} class. */
         public Builder contract(Class<?> generatedClient) {
-            var c = ServedContract.of(generatedClient);
-            contracts.put(c.name, c);
+            var c = ServedContract.of(generatedClient, org.julclang.state.serve.JsonValues.BAD_VALUES);
+            contracts.put(c.name(), c);
             return this;
         }
 
@@ -198,7 +202,7 @@ public final class JoustServer {
             try {
                 JsonNode out = switch (path) {
                     case "/api/contracts" -> requireMethod(m, "GET", this::contractsJson);
-                    case "/api/description" -> requireMethod(m, "GET", () -> served(query(ex).get("contract")).description);
+                    case "/api/description" -> requireMethod(m, "GET", () -> served(query(ex).get("contract")).description());
                     case "/api/prepare" -> {
                         requireMethod(m, "POST", () -> null);
                         yield prepare(ex, body(ex));
@@ -212,7 +216,7 @@ public final class JoustServer {
                 reply(ex, 200, out);
             } catch (NotFound e) {
                 reply(ex, 404, error("not found"));
-            } catch (Request.Bad | JsonValues.BadValue | RequireException e) {
+            } catch (BadRequest | JsonValues.BadValue | org.julclang.state.serve.JsonValues.BadValue | RequireException e) {
                 reply(ex, 400, error(e.getMessage()));
             } catch (Busy e) {
                 reply(ex, e.status, error(e.getMessage()));
@@ -259,26 +263,28 @@ public final class JoustServer {
         JsonNode meta = c.meta(kind, text(req, "method"));
         // ADR-0016 D11: a keyed contract's creation (its heads) is a keyed call; this service designates no input for a
         // page, so the engine prepares it (R-G1).
-        for (JsonNode k : c.x.path("keyed")) {
-            if (k.isObject() && kind.equals("init")) {
-                throw new Request.Bad(c.x.path("contract").asText() + " has keyed types: its creation is prepared by the engine"
-                        + " with the page's designated input (ADR-0016 D11), not by this service");
-            }
+        if (c.hasKeyedTypes() && kind.equals("init")) {
+            throw new BadRequest(c.contract() + " has keyed types: its creation is prepared by the engine"
+                    + " with the page's designated input (ADR-0016 D11), not by this service");
         }
         String address = text(req, "address");
         WalletAccount wallet;
         try {
             wallet = WalletAccount.of(address, runtime.network());
         } catch (RuntimeException e) {
-            throw new Request.Bad("address: " + e.getMessage());
+            throw new BadRequest("address: " + e.getMessage());
         }
         JsonNode pay = req.path("pay");
         BigInteger lovelace = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         String instance = req.path("instance").isTextual() ? req.get("instance").asText() : null;
         String object = req.path("object").isTextual() ? req.get("object").asText() : null;
+        // ADR-0016 D11: this service designates no input, so it serves no keyed call. The shared adapter dispatches
+        // keyed kinds since ADR-0022 M3 (for the dev host, which designates); keep this service's answer as it was.
+        if (kind.startsWith("keyed")) throw new BadRequest("unknown kind " + kind);
         Object[] made = new Object[1];
         PreparedTx p = Compose.of(runtime, wallet)
-                .add(() -> made[0] = c.call(runtime, wallet, kind, meta, instance, object, req.path("args"), lovelace, pay.get("assets")))
+                .add(() -> made[0] = asBefore(meta.get("name").asText(),
+                        () -> c.call(runtime, wallet, kind, meta, instance, object, req.path("args"), lovelace, pay.get("assets"))))
                 .prepare();
         ObjectNode out = JsonValues.JSON.createObjectNode();
         out.put("cbor", p.cbor());
@@ -289,7 +295,7 @@ public final class JoustServer {
         out.set("plan", JsonValues.JSON.valueToTree(p.plan()));   // ADR-0013 D4: the page checks it describes cbor
         if (kind.equals("init") && made[0] != null) out.put("instance", (String) made[0]);
         if (kind.equals("ownedInit") && made[0] != null) out.put("object", (String) made[0]);
-        LOG.log(System.Logger.Level.INFO, "prepared {0} {1}.{2} for {3}", p.txHash(), c.x.get("contract").asText(), meta.get("name").asText(), address);
+        LOG.log(System.Logger.Level.INFO, "prepared {0} {1}.{2} for {3}", p.txHash(), c.contract(), meta.get("name").asText(), address);
         onPrepared.accept(req, out);
         return out;
     }
@@ -300,20 +306,47 @@ public final class JoustServer {
         String instance = text(req, "instance");
         String view = req.path("view").isTextual() ? req.get("view").asText() : null;
         ObjectNode out = JsonValues.JSON.createObjectNode();
-        out.set("value", JsonValues.toJson(c.view(runtime, instance, view, req.get("args"))));
+        out.set("value", JsonValues.toJson(asBefore(view, () -> c.view(runtime, instance, view, req.get("args")))));
         return out;
+    }
+
+    /**
+     * Runs a served call or view as this service always has: a {@link CallAbort} error the generated client raised
+     * (which {@link ServedContract} passes on as itself since ADR-0022 D16) becomes the refusal it was before, and a bad
+     * argument value is this service's {@link JsonValues.BadValue}.
+     */
+    private static <T> T asBefore(String what, java.util.function.Supplier<T> body) {
+        try {
+            return body.get();
+        } catch (org.julclang.state.serve.JsonValues.BadValue e) {
+            throw new JsonValues.BadValue(e.getMessage());
+        } catch (Error e) {
+            if (e instanceof CallAbort) throw new JoustException(what + " failed", e);
+            throw e;
+        }
     }
 
     private JsonNode contractsJson() {
         ObjectNode out = JsonValues.JSON.createObjectNode();
         var list = out.putArray("contracts");
-        for (ServedContract c : contracts.values()) list.add(c.deployment(runtime));
+        for (ServedContract c : contracts.values()) {
+            StateContractHandle<?> handle;
+            try {
+                handle = c.handle(runtime);
+            } catch (RuntimeException e) {
+                throw new IllegalStateException(e);
+            } catch (Error e) {
+                if (e instanceof CallAbort) throw new IllegalStateException(e);
+                throw e;
+            }
+            list.add(c.deploymentOf(handle));
+        }
         return out;
     }
 
     private ServedContract served(String name) {
         ServedContract c = name == null ? null : contracts.get(name);
-        if (c == null) throw new Request.Bad("unknown contract " + name);
+        if (c == null) throw new BadRequest("unknown contract " + name);
         return c;
     }
 
@@ -353,15 +386,15 @@ public final class JoustServer {
 
     private static JsonNode body(HttpExchange ex) {
         String type = ex.getRequestHeaders().getFirst("Content-Type");
-        if (type == null || !type.startsWith("application/json")) throw new Request.Bad("Content-Type must be application/json");
+        if (type == null || !type.startsWith("application/json")) throw new BadRequest("Content-Type must be application/json");
         try (InputStream in = ex.getRequestBody()) {
             byte[] b = in.readNBytes(MAX_BODY + 1);
             if (b.length > MAX_BODY) throw new Busy(413, "request too large");
             JsonNode n = JsonValues.JSON.readTree(b);
-            if (n == null || !n.isObject()) throw new Request.Bad("the body must be a JSON object");
+            if (n == null || !n.isObject()) throw new BadRequest("the body must be a JSON object");
             return n;
         } catch (IOException e) {
-            throw new Request.Bad("not JSON");
+            throw new BadRequest("not JSON");
         }
     }
 
@@ -378,7 +411,7 @@ public final class JoustServer {
 
     private static String text(JsonNode n, String field) {
         JsonNode v = n.get(field);
-        if (v == null || !v.isTextual()) throw new Request.Bad(field + " is required");
+        if (v == null || !v.isTextual()) throw new BadRequest(field + " is required");
         return v.asText();
     }
 

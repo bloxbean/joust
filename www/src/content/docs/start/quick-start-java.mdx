@@ -155,6 +155,13 @@ The plugin does what the hand-written `build.gradle` below spells out:
 | `julc-state-testkit`, `junit-platform-launcher` | the tests |
 | UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
 | `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
+| `joustHostSpec`, the protocol 1 launch manifest for an editor's dev host | `build/joust/host-spec.json` |
+
+For an editor launch from a trusted project, run `./gradlew joustHostSpec`. It builds the main runtime class path
+and records its entries in lookup order, with the toolchain's Java executable and SHA-256 digests. The isolated
+`joustHost` configuration supplies the plugin's serving adapter and stdio host. An HTTP application reuses its
+matching adapter. A version mismatch or a jar with a manifest `Class-Path` fails the task. The editor verifies a
+private, read-only copy of those entries and starts `DevHost --stdio` from that snapshot.
 
 `joust new` fills in the version of the `joust` that runs it; the newest is the newest release whose tag starts with
 `v` on the [releases page](https://github.com/bloxbean/joust/releases) (`npm view @julclang/joust version`). Every other version comes from the JOUST release the

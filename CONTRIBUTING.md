@@ -41,9 +41,9 @@ The modules are described in the [README](README.md#modules). In short:
 
 - `julc-state-api`: what a contract imports. It must stay compilable by JuLC **and** runnable on the JVM.
 - `julc-state-processor`: the annotation processor that generates the validator, the client and the description.
-- `julc-state-runtime`, `julc-state-testkit`, `julc-state-verifier`, `julc-state-dsl`, `julc-state-server`,
-  `julc-state-toolchain`, `julc-state-runtime-wasm`: runtime, tests, map verifier, `.jsc`, prepare service and the
-  Wasm engines.
+- `julc-state-runtime`, `julc-state-testkit`, `julc-state-verifier`, `julc-state-dsl`, `julc-state-serve`,
+  `julc-state-host`, `julc-state-server`, `julc-state-toolchain`, `julc-state-runtime-wasm`: runtime, tests, map verifier, `.jsc`, the
+  adapter over generated clients, the stdio dev host, the prepare service and the Wasm engines.
 - `js/*`: the npm packages. `examples/*`: example contracts with JVM, on-chain harness, attack-suite and DevKit tests.
 
 ## Design changes need an ADR

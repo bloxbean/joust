@@ -2,7 +2,10 @@ package org.julclang.state.runtime.snapshot;
 
 import org.julclang.core.PlutusData;
 import org.julclang.core.types.JulcList;
+import org.julclang.ledger.TxOutRef;
 import org.julclang.state.api.MapEntry;
+import org.julclang.state.api.mpf.MapClaim;
+import org.julclang.state.api.mpf.MapClaims;
 import org.julclang.state.api.mpf.Mpf;
 import org.julclang.state.api.mpf.ProofStep;
 import org.julclang.state.api.mpf.ReadProof;
@@ -100,6 +103,33 @@ public final class SuppliedProver implements MerkleSupport.Prover {
     }
 
     // ------------------------------------------------------------------ decoding (no reflection: the Wasm image)
+
+    /** Decode a ledger withdrawal using the explicit Branch/Fork/Leaf tags. The order of
+     * getPermittedSubclasses() at image run time depends on the native-image build. */
+    public static MapClaims decodeClaims(PlutusData data) {
+        String need = "map verifier redeemer";
+        var field = constr(data, 1, need).fields().getFirst();
+        if (!(field instanceof PlutusData.ListData list)) throw new JoustException("expected a list of map claims");
+        JulcList<MapClaim> claims = JulcList.empty();
+        for (var item : list.items().reversed()) {
+            var f = constr(item, 7, need).fields();
+            if (!(f.get(4) instanceof PlutusData.ListData rs) || !(f.get(5) instanceof PlutusData.ListData ws))
+                throw new JoustException("expected map claim reads and writes");
+            JulcList<ReadProof> reads = JulcList.empty();
+            for (var r : rs.items().reversed()) {
+                var fields = constr(r, 2, need).fields();
+                reads = reads.prepend(new ReadProof(entry(fields.get(0), need), proof(fields.get(1), need)));
+            }
+            JulcList<WriteProof> writes = JulcList.empty();
+            for (var w : ws.items().reversed()) {
+                var fields = constr(w, 3, need).fields();
+                writes = writes.prepend(new WriteProof(entry(fields.get(0), need), entry(fields.get(1), need), proof(fields.get(2), need)));
+            }
+            claims = claims.prepend(new MapClaim(bytes(f.get(0), need), TxOutRef.fromPlutusData(f.get(1)),
+                    integer(f.get(2), need), bytes(f.get(3), need), reads, writes, bytes(f.get(6), need)));
+        }
+        return new MapClaims(claims);
+    }
 
     private static PlutusData.ConstrData constr(PlutusData d, int fields, String need) {
         if (!(d instanceof PlutusData.ConstrData c) || c.tag() != 0 || c.fields().size() != fields) {

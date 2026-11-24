@@ -329,23 +329,18 @@ final class AssetTx {
         var picked = new ArrayList<Utxo>();
         int passedOver = 0;
         boolean unanswered = false;
+        // A hosted call owns the complete call-local listing (ADR-0022 D6): read all of it in one answer, bounded by the
+        // host's read limits (#151 Codex review). A provider is read page by page until the payment is covered or the
+        // listing ends (#165 Codex round 5); a page it fails to answer is an error, not the end (Pages.toEnd).
+        boolean hosted = contract.runtime.hostedCall();
+        ClaimStore store = contract.runtime.claimStore();
         try {
-            // Every page until the payment is covered or the listing ends (#165 Codex round 5); a page the provider
-            // fails to answer is an error, not the end.
-            for (int page = 1; !missing.isEmpty(); page++) {
-                if (page > StateContractHandle.MAX_PAGES) {
-                    throw new JoustException(what + ": the caller's listing has more than " + StateContractHandle.MAX_PAGES + " pages");
-                }
-                var r = contract.runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 100, page);
-                if (!r.isSuccessful()) {
-                    if (page == 1) {   // as before: nothing listed (RequireException below), or the provider did not answer
-                        unanswered = true;
-                        break;
-                    }
-                    throw new JoustException(what + ": cannot read page " + page + " of the caller's UTxOs: " + r.getResponse());
-                }
-                if (r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
+            var walk = new Pages(contract.runtime, caller.baseAddress(), hosted ? Integer.MAX_VALUE : 100,
+                    hosted ? 1 : StateContractHandle.MAX_PAGES)
+                    .toEnd((page, response) -> what + ": cannot read page " + page + " of the caller's UTxOs: " + response,
+                            what + ": the caller's listing has more than " + StateContractHandle.MAX_PAGES + " pages");
+            for (var list = missing.isEmpty() ? null : walk.next(); list != null; list = missing.isEmpty() ? null : walk.next()) {
+                for (Utxo u : list) {
                     if (counted.contains(key(u)) || !holdsAny(u, missing)) continue;
                     String ref = Designation.ref(u);
                     boolean spent = cap != null && cap.inputs.contains(ref);
@@ -355,7 +350,7 @@ final class AssetTx {
                     // only a hash without the inline datum is a datum hash (#165 Codex).
                     // Spent already (R3-2): it counts whatever it carries, since the transaction spends it anyway.
                     if (!spent && (u.getReferenceScriptHash() != null || u.getDataHash() != null && u.getInlineDatum() == null
-                            || read.contains(ref) || !Designation.pickable(u, TxRunner.currentOperation()))) {
+                            || read.contains(ref) || !Designation.pickable(store, u, TxRunner.currentOperation()))) {
                         passedOver++;
                         continue;
                     }
@@ -375,6 +370,7 @@ final class AssetTx {
                     if (missing.isEmpty()) break;
                 }
             }
+            unanswered = walk.unanswered();   // as before: nothing listed, or the provider did not answer (said below)
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

@@ -26,7 +26,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0018; header `jsc 1`, optional; v1/ADR-0005 removed). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
-- `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection; `js/state-client`: the
+- `julc-state-serve`: the transport-independent adapter over generated clients (`ServedContract`, `JsonValues`; ADR-0022
+  D16), shared by the prepare service and the dev host.
+- `julc-state-host`: the JVM stdio dev host for generated clients (ADR-0022). Its wire interface is in
+  `docs/protocol/dev-host-1.md`.
+- `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection, through `julc-state-serve`; `js/state-client`: the
   JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
 - `julc-state-toolchain`: ADR-0015's toolchain. `Toolchain.build(files)` compiles `.java`/`.jsc` without Gradle,
   through JuLC's embedded javac and the shared `JoustGenerators`; `toolchainWasm` builds the Web Image (`joust.build`
@@ -75,6 +79,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `@ValidAfter/@ValidBefore`, `@Storage`, `@Owned/@Shared`, `@Batched`, `@Event`, `@Invariant`, `@Upgradeable`, `@Calls`.
 
 ## Gotchas
+- ADR-0022: on an explicit trusted launch, run the project's `joustHostSpec` and read `build/joust/host-spec.json`.
+  Copy its ordered class path to a private read-only snapshot outside the build and Gradle caches, verify the digest,
+  and launch the toolchain's `java` with D2's options and `DevHost --stdio` from that snapshot. The host never writes
+  files. The client owns the snapshot and keeps it until the host exits.
 - JuLC (javac frontend, ADR-068) sees only its own on-chain API plus library sources: `.java` under
   `META-INF/plutus-sources/` (with `index.txt`) on the **annotation processor path**. No `@Documented`, no `throw`,
   static calls through imported simple class names only, no generic records.
@@ -264,6 +272,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   (`Offline.java`; only a script's refusal counts). Nested `node --test` runs need `NODE_TEST_CONTEXT` removed.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
+- Decode Plutus data CBOR with `org.julclang.state.runtime.PlutusBytes` (iterative, reads the original bytes, keeps
+  repeated map keys), never JuLC's `PlutusDataCborDecoder` (recursive: overflows the stack on deep data, and traps in
+  the Wasm engines from about 1,000 levels). Values fed to the VM or the dev host's strict wire keep their own
+  256-level bound (`SchemaCodec.checkNesting`).
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
 - JuLC's subset: immutable locals (except loop accumulators), no `Function.apply`, records and sealed interfaces only.
 - JuLC treats `@StateContract` exactly like `@OnchainLibrary` (a fixed alias, bloxbean/julc#311): contracts need no

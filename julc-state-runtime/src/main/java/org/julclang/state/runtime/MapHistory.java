@@ -8,6 +8,8 @@ import com.bloxbean.cardano.client.plutus.spec.RedeemerTag;
 import com.bloxbean.cardano.vds.core.api.NodeStore;
 import com.bloxbean.cardano.vds.mpf.MpfTrie;
 import org.julclang.core.PlutusData;
+import org.julclang.state.runtime.snapshot.SuppliedProver;
+import org.julclang.state.api.mpf.MapWitnesses;
 import org.julclang.state.api.mpf.Mpf;
 
 import java.util.ArrayList;
@@ -66,6 +68,25 @@ public final class MapHistory {
             out.addAll(claims(PlutusBytes.decode(cbor)));   // the bytes just hashed
         }
         return out;
+    }
+
+    /**
+     * Replay a unit's whole protocol-1 history: every withdrawal is decoded and its proofs verified first, then the
+     * claims are applied together, in any order (as {@link #rebuild} does), so the result does not depend on the
+     * order of transactions within a block (#160 review Q2). The caller checks each datum hash.
+     */
+    public static void replay(NodeStore store, List<byte[]> redeemers) {
+        var all = new ArrayList<Claim>();
+        for (byte[] redeemer : redeemers) {
+            var decoded = PlutusBytes.decode(redeemer);
+            var typed = SuppliedProver.decodeClaims(decoded);
+            for (var claim : typed.claims()) if (!MapWitnesses.verify(claim))
+                throw new JoustException("invalid map history proof");
+            var claims = claims(decoded);
+            if (claims.isEmpty()) throw new JoustException("empty or malformed map verifier redeemer");
+            all.addAll(claims);
+        }
+        apply(store, all);
     }
 
     /** The MapClaims a map-verifier redeemer carries (none when the data is something else). */
