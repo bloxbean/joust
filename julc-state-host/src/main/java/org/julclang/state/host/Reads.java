@@ -21,7 +21,17 @@ import static org.julclang.state.host.Wire.*;
  * asset filtering and canonical UTxOs after acquisition of the complete address set. */
 final class Reads {
     interface Peer { Call.Answer read(ObjectNode request); }
-    static final List<String> KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> BASE_KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> MAP_KINDS = List.of("assetHistory", "redeemers", "datum");
+    private final Map<JsonNode, JsonNode> mapAnswers = new HashMap<>();
+    JsonNode mapAnswer(String kind, ObjectNode request) {
+        request.put("kind", kind);
+        return mapAnswers.computeIfAbsent(request, key -> answer(kind, request));
+    }
+    /** Whether this call already holds the answer (it then costs no read). */
+    boolean hasMapAnswer(String kind, ObjectNode request) {
+        return mapAnswers.containsKey(request.put("kind", kind));
+    }
     private final Peer peer;
     private final long now, ahead, maxCount, maxBytes;
     private final int network;
@@ -33,7 +43,6 @@ final class Reads {
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
-    private final Set<String> absentScripts = new HashSet<>();
     private final Map<String, Optional<Boolean>> registration = new HashMap<>();
     private final Set<String> queriedOutputs = new HashSet<>();
 
@@ -124,8 +133,7 @@ final class Reads {
             }
             case "script.getPlutusScript", "script.getPlutusScriptCbor" -> {
                 String hash = (String) args[0];
-                if (!snapshot.scripts.containsKey(hash) && !absentScripts.contains(hash)) script(hash);
-                if (absentScripts.contains(hash)) return Result.error("absent").code(404);
+                if (!snapshot.scripts.containsKey(hash) && !snapshot.absentScripts.contains(hash)) script(hash);
                 target = local.getScriptService();
             }
             case "block.getLatestBlock" -> {
@@ -282,7 +290,7 @@ final class Reads {
 
     private void script(String hash) {
         var v = value("script", "hash", hash);
-        if (v == null) { absentScripts.add(hash); accepted(); return; }
+        if (v == null) { snapshot.absentScripts.add(hash); accepted(); return; }
         String type = v.path("type").asText("");
         if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
         snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
@@ -315,7 +323,7 @@ final class Reads {
         if (field != null) params.put(field, key);
         return answer(kind, params).get("value");
     }
-    private JsonNode answer(String kind, ObjectNode params) {
+    JsonNode answer(String kind, ObjectNode params) {
         if (++count > maxCount) throw HostError.bad("readLimit", "read count exceeds the session limit");
         var response = peer.read(params.put("kind", kind));
         bytes += response.bytes();
@@ -344,7 +352,7 @@ final class Reads {
         if (variants != 1 || a.path("value").isNull()
                 || a.has("absent") && !a.get("absent").booleanValue()
                 || a.has("unsupported") && !a.get("unsupported").booleanValue()
-                || a.has("more") && (!kind.equals("utxos") || !a.has("value"))) throw inconsistent("invalid read outcome");
+                || a.has("more") && (!(kind.equals("utxos") || kind.equals("assetHistory")) || !a.has("value"))) throw inconsistent("invalid read outcome");
         lastHash = hash;
         lastHeight = height.longValue();
         greatestTip = slot.longValue();
@@ -360,7 +368,11 @@ final class Reads {
     }
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
     // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
+    // Map history answers (assetHistory, redeemers, datum) never call this: they do not advance reservations.
     private void accepted() { observe.accept(greatestTip); }
+    /** Reads this call may still make within readsPerCall, and the limit itself. */
+    long remainingReads() { return maxCount - count; }
+    long readLimit() { return maxCount; }
     // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
     static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
     // The wire schema's nullable output fields: absent, null, or a string of the field's format.

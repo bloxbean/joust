@@ -32,7 +32,7 @@
           "properties": {
             "kind": {"const": "bad"},
             "code": {
-              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit", "listingGone"]
+              "enum": ["busy", "network", "nowDecreased", "nowImplausible", "tooLarge", "stageMismatch", "unknownReservation", "conflict", "notExpired", "unbounded", "restoreClosed", "request", "contract", "method", "readLimit", "listingGone", "operation"]
             }
           }
         },
@@ -40,7 +40,7 @@
           "properties": {
             "kind": {"const": "refusal"},
             "code": {
-              "enum": ["pending", "window", "prerequisite", "reconcile", "deepRollback", "expiredOnArrival", "runtime", "require", "cooldown"]
+              "enum": ["pending", "window", "prerequisite", "reconcile", "deepRollback", "expiredOnArrival", "runtime", "require", "cooldown", "needsDesignated", "mayHaveLanded"]
             }
           }
         },
@@ -58,7 +58,7 @@
             "code": {
               "anyOf": [
                 {
-                  "enum": ["protocol", "runtimeVersion", "params", "maps", "keyed", "unverifiable", "authorizedBy"]
+                  "enum": ["protocol", "runtimeVersion", "outsideProject", "views", "params", "maps", "keyed", "unverifiable", "authorizedBy"]
                 },
                 {"type": "string", "pattern": "^read:[A-Za-z][A-Za-z0-9.]*$"}
               ]

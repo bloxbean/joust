@@ -15,13 +15,33 @@ import static org.julclang.state.host.Wire.*;
 final class Reservations implements ClaimStore {
     enum State { prepared, shallow, confirmed, expired, discarded }
     /**
-     * {@code publishes}: the prerequisite components the body would put on chain (D14 ids {@code referenceScript:h}
-     * for an output carrying script h as its reference script, {@code stakeRegistration:h} for a registration of
-     * credential h). Derived from the body, so a restored body counts as well as one this host built.
+     * {@code keyedTokens}: the keyed object units the body holds or mints (M3a). {@code publishes}: the prerequisite
+     * components the body would put on chain (D14 ids {@code referenceScript:h} for an output carrying script h as its
+     * reference script, {@code stakeRegistration:h} for a registration of credential h). Both derived from the body, so
+     * a restored body counts as well as one this host built.
      */
-    record Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to, Set<String> publishes) {
+    record Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to, Set<String> keyedTokens,
+                Set<String> publishes) {
         Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to) {
-            this(hash, inputs, collateral, from, to, Set.of());
+            this(hash, inputs, collateral, from, to, Set.of(), Set.of());
+        }
+        // Include relinked predecessors and heads. Their previous outrefs may already have changed at shallow inclusion.
+        private static Set<String> keyedTokens(TransactionBody body) {
+            var units = new HashSet<String>();
+            for (var out : body.getOutputs()) {
+                if (out.getInlineDatum() == null || out.getValue().getMultiAssets().isEmpty()) continue;
+                var payment = new com.bloxbean.cardano.client.address.Address(out.getAddress()).getPaymentCredential();
+                if (payment.isPresent() && payment.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Script)
+                    addKeyed(units,out.getValue(),HexFormat.of().formatHex(payment.get().getBytes()));
+            }
+            if (body.getMint()!=null) addKeyed(units,new Value(java.math.BigInteger.ZERO,body.getMint()),null);
+            return Set.copyOf(units);
+        }
+        private static void addKeyed(Set<String> units, Value value, String policy) {
+            for (var amount : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(value)) {
+                String unit = amount.getUnit();
+                if (unit.length()==114 && unit.startsWith("4b",56) && (policy == null || unit.startsWith(policy))) units.add(unit);
+            }
         }
         static Body of(Transaction tx, String hash, int network) {
             var b = tx.getBody();
@@ -33,7 +53,7 @@ final class Reservations implements ClaimStore {
                 for (var withdrawal : b.getWithdrawals()) Reads.checkAddress(withdrawal.getRewardAddress(), network);
             }
             return new Body(hash, refs(b.getInputs()), refs(b.getCollateral()), b.getValidityStartInterval(), b.getTtl(),
-                    publishes(b));
+                    keyedTokens(b), publishes(b));
         }
         private static Set<String> publishes(TransactionBody b) {
             var ids = new HashSet<String>();
@@ -116,6 +136,15 @@ final class Reservations implements ClaimStore {
         if (reconcile) throw HostError.refusal("reconcile", "restore is incomplete");
     }
     Entry prepare(Body body, long tip) {
+        return prepare(body, tip, null);
+    }
+    /** {@code designated}: a keyed call's designated input, which the body must spend (ADR-0022 D11), else null. */
+    Entry prepare(Body body, long tip, String designated) {
+        if (designated != null && !body.inputs.contains(designated)) throw KeyedOperation.mismatch();
+        if (body.inputs.stream().anyMatch(this::avoids) || body.collateral.stream().anyMatch(this::avoids))
+            throw HostError.refusal("pending", "transaction touches a reserved input");
+        if (designated != null && body.keyedTokens.stream().anyMatch(this::reservesToken))
+            throw HostError.refusal("pending", "a keyed object is still reserved");
         if (body.to <= tip) throw HostError.refusal("expiredOnArrival", "transaction is already past its upper bound");
         return new Entry(Long.toString(++lastId), body, State.prepared, null);
     }
@@ -135,6 +164,11 @@ final class Reservations implements ClaimStore {
         return false;
     }
 
+    @Override public boolean reservesToken(String unit) {
+        for (var e : entries.values()) if (e.live() && e.body.keyedTokens.contains(unit)) return true;
+        return false;
+    }
+
     @Override public boolean avoids(String ref) {
         for (var e : entries.values()) {
             if (e.live() && (e.body.inputs.contains(ref) || e.body.collateral.contains(ref))) return true;
@@ -151,6 +185,17 @@ final class Reservations implements ClaimStore {
     @Override public boolean isDesignated(String ref) { return false; }
     @Override public boolean designate(String ref) { throw new Unsupported("designate"); }
     @Override public void undesignate(String ref, Expiry when) { throw new Unsupported("undesignate"); }
+
+    /**
+     * ADR-0022 D11's retry rules, after the call's identity matched its record (rule 1); the body's spending of the
+     * designation (rule 2) is {@link #prepare}'s. {@code unspent}: the designation is in the payer's complete listing.
+     */
+    void checkOperation(KeyedOperation op, boolean unspent, long tip, String objectUnit) {
+        if (!unspent) throw HostError.refusal("mayHaveLanded", "designated input spent");
+        if (avoids(op.identity().designated()) || objectUnit != null && reservesToken(objectUnit)
+                || op.attempts().values().stream().anyMatch(to -> tip - to <= margin))
+            throw HostError.refusal("pending", "a previous attempt or an input is still reserved");
+    }
 
     void observe(long tip) {
         if (!reconcile) entries.replaceAll((id, e) -> advance(e, tip));

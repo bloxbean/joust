@@ -38,6 +38,8 @@ dependencies {
     testImplementation project(':examples:counter')
     testImplementation project(':examples:escrow')
     testImplementation project(':examples:token')
+    testImplementation project(':examples:locker')
+    testImplementation project(':examples:guild')
     testImplementation project(':examples:bank')
     testImplementation project(':examples:treasury')
     testImplementation project(':examples:devkit')
@@ -52,6 +54,8 @@ dependencies {
 tasks.withType(Test).configureEach {
     inputs.files(rootProject.fileTree('fixtures/m3') { include 'escrow/*.json', 'dex/*.json' })
             .withPropertyName('m3Recordings').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(rootProject.fileTree('fixtures/m3') { include 'token/*.json', 'locker/*.json', 'guild/*.json' })
+            .withPropertyName('mapRecordings').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
     // The forked-host tests (fd 1 diversion, no side effects) launch `java` from this toolchain.
     def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
@@ -89,10 +93,78 @@ tasks.named('test', Test) {
     systemProperty 'joust.host.vectors', vectors.absolutePath
     if (providers.gradleProperty('joustHostFixtures').isPresent()) {
         systemProperty 'joust.host.record', 'true'
+        systemProperty 'joust.host.mapsOnly', providers.gradleProperty('joustHostFixtures').get() == 'maps'
+        systemProperty 'joust.host.keyedOnly', providers.gradleProperty('joustHostFixtures').get() == 'keyed'
         outputs.upToDateWhen { false }
     }
     if (providers.gradleProperty('joustHostE2e').isPresent()) {
         systemProperty 'joust.host.e2e', 'true'
         outputs.upToDateWhen { false }
+    }
+}
+
+// Client-only tools. Neither main.output nor the host's runtimeElements variant depends on this source set.
+sourceSets {
+    conformance {
+        compileClasspath += sourceSets.main.output
+        resources {
+            srcDir rootProject.file('fixtures/host')
+            include 'sessions/*.json', 'verifier/*.json'
+        }
+    }
+}
+configurations.conformanceImplementation.extendsFrom configurations.implementation
+dependencies {
+    conformanceImplementation libs.bouncycastle.bcprov
+    testImplementation sourceSets.conformance.output
+    testImplementation libs.bouncycastle.bcprov
+}
+def clientKit = tasks.register('conformanceJar', Jar) {
+    archiveClassifier = 'conformance'
+    from(sourceSets.conformance.output)
+    // Share the actual D2 codec. The classifier can run with the dependencies in the published POM.
+    from(sourceSets.main.output) { include 'org/julclang/state/host/Frames*.class' }
+    from(rootProject.file('docs/protocol/dev-host-1-conformance.md'))
+}
+publishing.publications.withType(MavenPublication).configureEach {
+    if (name == 'mavenJava') artifact(clientKit)
+}
+tasks.named('test') {
+    inputs.dir(rootProject.file('fixtures/m3/token'))
+    inputs.dir(rootProject.file('fixtures/m3/locker'))
+    inputs.dir(rootProject.file('fixtures/m3/registry'))
+    inputs.dir(rootProject.file('fixtures/host/verifier'))
+    inputs.dir(rootProject.file('fixtures/host/sessions'))
+    def archive = clientKit.flatMap { it.archiveFile }
+    def clientClasspath = files(archive, configurations.conformanceRuntimeClasspath)
+    inputs.files(clientClasspath).withPropertyName('packagedClientKit').withNormalizer(ClasspathNormalizer)
+    doFirst {
+        systemProperty 'joust.host.clientKit', archive.get().asFile.absolutePath
+        systemProperty 'joust.host.clientKitClassPath', clientClasspath.asPath
+    }
+}
+
+tasks.register('recordClientConformance', JavaExec) {
+    group = 'verification'
+    description = 'Regenerate protocol-1 client vectors and framed sessions from the offline host recordings.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.julclang.state.host.ClientVectors'
+    systemProperty 'joust.mapStore', 'memory'
+    systemProperty 'joust.host.fixtures', rootProject.file('fixtures/m0').absolutePath
+    systemProperty 'joust.host.vectors', rootProject.file('fixtures/host').absolutePath
+}
+
+// Run after packaging both Web Images under js/{joust,joust-runtime}/engine, as in the engines job.
+tasks.register('nodeHostConformance', Exec) {
+    group = 'verification'
+    dependsOn clientKit
+    workingDir rootDir
+    commandLine 'node', '--test', 'js/joust/test/host.test.js', 'js/joust/test/host-conformance.test.js'
+    def cp = files(clientKit.flatMap { it.archiveFile }, configurations.conformanceRuntimeClasspath)
+    doFirst {
+        environment 'JOUST_CONFORMANCE_CP', cp.asPath
+        environment 'JOUST_TEST_JAVA', javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(25)
+        }.get().executablePath.asFile
     }
 }

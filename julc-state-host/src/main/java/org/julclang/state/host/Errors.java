@@ -32,9 +32,18 @@ import java.util.Map;
  *   <li>a {@link StackOverflowError}: {@code internal}, {@code tooDeep}; anything else {@code internal}, {@code internal}.</li>
  * </ul>
  */
-final class Errors {
+public final class Errors {
 
     private Errors() {}
+
+    /** JSON-RPC error shared by the two transports and the engine's typed refusal result. */
+    public static com.fasterxml.jackson.databind.node.ObjectNode rpcError(Throwable cause) {
+        return classify(cause).rpcError();
+    }
+
+    public static com.fasterxml.jackson.databind.JsonNode badArgument(String code, String message) {
+        return HostError.bad(code, message).rpcError().required("data");
+    }
 
     static HostError classify(Throwable t) {
         // Control events and read failures first: they decide the call's end wherever they surface (D10: a control

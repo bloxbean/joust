@@ -65,7 +65,11 @@ class ForkedSessionTest {
         int vectors = 0;
         try (var files = Files.list(HostVectorsTest.DIRECTORY)) {
             for (var f : files.filter(v -> v.toString().endsWith(".json")).sorted().toList()) {
-                success(hello(root, entries, fingerprint, JSON.readTree(f.toFile())));
+                var v = JSON.readTree(f.toFile());
+                // The historical M1b maps refusal is superseded: a maps host asks for prerequisite evidence first
+                // (HostVectorsTest.replay keeps its own check).
+                if ("maps".equals(v.path("feature").textValue())) continue;
+                success(hello(root, entries, fingerprint, v));
                 vectors++;
             }
         }
@@ -187,9 +191,7 @@ class ForkedSessionTest {
             assertEquals(pair.required("request"), q);
             return pair.required("answer");
         }, null);
-        var expected = v.required("expected");
-        if (v.has("feature")) error("unsupported", str(expected, "code"), response);
-        else assertEquals(expected.required("cbor"), success(response).at("/prepared/cbor"));
+        HostVectorsTest.checkOutcome(v, response);
     }
 
     /** One forward call, answering its reverse reads; with {@code cancel}, cancels it at its first read instead. */

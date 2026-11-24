@@ -408,7 +408,7 @@ class ServedContractTest {
     @Test
     void reflectedRecordFailuresKeepTheirIdentityInBothDirections() {
         assertSame(ABORT, assertThrows(ReadFailed.class,
-                () -> JsonValues.fromJson(JSON.getNodeFactory().numberNode(1), Input.class, "arg")));
+                () -> JsonValues.fromJson(JSON.createObjectNode().put("n", 1), Input.class, "arg")));
         assertSame(ABORT, assertThrows(ReadFailed.class, () -> JsonValues.toJson(List.of(new Output(1)))));
     }
 

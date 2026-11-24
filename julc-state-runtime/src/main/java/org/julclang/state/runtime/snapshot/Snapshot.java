@@ -47,6 +47,7 @@ public final class Snapshot {
     public final Map<String, List<Utxo>> assetUtxos = new LinkedHashMap<>();
     public final Map<String, Utxo> outputs = new LinkedHashMap<>();
     public final Set<String> absent = new LinkedHashSet<>();
+    public final Set<String> absentScripts = new LinkedHashSet<>();
     public final Map<String, Script> scripts = new LinkedHashMap<>();
 
     public static String ref(String txHash, int index) {
@@ -75,6 +76,7 @@ public final class Snapshot {
             n.path("assetUtxos").fields().forEachRemaining(e -> s.assetUtxos.put(e.getKey(), utxoList(e.getValue())));
             for (Utxo u : utxoList(n.path("outputs"))) s.outputs.put(ref(u.getTxHash(), u.getOutputIndex()), u);
             for (JsonNode a : n.path("absent")) s.absent.add(a.asText());
+            for (JsonNode a : n.path("absentScripts")) s.absentScripts.add(a.asText());
             n.path("scripts").fields().forEachRemaining(e -> s.scripts.put(e.getKey(), new Script(
                     e.getValue().path("type").asText(null), e.getValue().path("cborHex").asText(null), e.getValue().path("cbor").asText(null))));
             return s;
@@ -94,6 +96,7 @@ public final class Snapshot {
         n.set("outputs", JSON.valueToTree(new ArrayList<>(outputs.values())));
         var abs = n.putArray("absent");
         absent.forEach(abs::add);
+        if (!absentScripts.isEmpty()) n.set("absentScripts", JSON.valueToTree(absentScripts));
         ObjectNode sc = n.putObject("scripts");
         scripts.forEach((k, v) -> {
             var o = sc.putObject(k);

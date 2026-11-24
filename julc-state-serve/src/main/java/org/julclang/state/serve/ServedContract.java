@@ -30,7 +30,7 @@ import java.util.List;
  * host's cancellation) as itself, so its kind is never inferred from text (D9). Any other {@code Error} or checked
  * exception from the generated client is wrapped in a {@link JoustException} with it as the cause, as before.
  */
-public final class ServedContract {
+public final class ServedContract implements ContractCalls {
 
     private final String name;               // the contract's fully qualified class name (the description's preamble title)
     private final Class<?> client;
@@ -163,7 +163,7 @@ public final class ServedContract {
                     Object made = m.invoke(null, values.toArray());
                     return client.getMethod("instanceId").invoke(made);
                 }
-                case "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy" -> {
+                case "action", "destroy", "ownedInit", "ownedAction", "ownedDestroy", "keyedInit", "keyedAction", "keyedRemove", "keyedRetire" -> {
                     boolean ownedSpend = kind.equals("ownedAction") || kind.equals("ownedDestroy");
                     if (ownedSpend && (object == null || !object.matches("4f[0-9a-f]{56}")))
                         throw new BadRequest("an owned call needs an object id");
@@ -173,6 +173,14 @@ public final class ServedContract {
                         for (JsonNode o : x.get("owned"))
                             if (o.get("type").asText().equals(meta.get("owned").asText())) lookup = o.get("lookup").asText();
                         at = client.getMethod(lookup, String.class).invoke(at, object);
+                    }
+                    if (kind.startsWith("keyed") && !kind.equals("keyedInit")) {
+                        JsonNode type = null;
+                        for (var k : x.path("keyed")) if (k.path("simple").equals(meta.path("keyed"))) type = k;
+                        if (type == null || object == null || !object.matches("(?:[0-9a-f]{2})+") ||
+                                object.length() / 2 > type.required("maxKeyBytes").intValue()) throw new BadRequest("invalid object key");
+                        at = client.getMethod(type.required("lookup").asText(), byte[].class)
+                                .invoke(at, java.util.HexFormat.of().parseHex(object));
                     }
                     Method m = find(at.getClass(), method, 1 + nArgs + (payable ? 1 : 0) + (takesAssets ? 1 : 0)
                             + (signers == null ? 0 : 1), false);
@@ -184,6 +192,7 @@ public final class ServedContract {
                         values.add(signers);
                     }
                     Object r = m.invoke(at, values.toArray());
+                    if (kind.equals("keyedInit")) return java.util.HexFormat.of().formatHex((byte[]) r.getClass().getMethod("key").invoke(r));
                     return kind.equals("ownedInit") ? r.getClass().getMethod("objectId").invoke(r) : null;
                 }
                 default -> throw new BadRequest("unknown kind " + kind);
@@ -262,7 +271,12 @@ public final class ServedContract {
         for (int i = 0; i < names.size(); i++) out.add(codec.decode(args.get(names.get(i)), types[offset + i], names.get(i)));
         int next = offset + names.size();
         if (payable) out.add(lovelace);
-        if (takesAssets) out.add(codec.decode(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets"));
+        if (takesAssets) {
+            Object offered = codec.decode(assets == null ? JsonValues.JSON.createArrayNode() : assets, types[next + (payable ? 1 : 0)], "assets");
+            // The wire orders a policy's token names as canonical CBOR (shorter first); the runtime's values are in
+            // ledger order (bytewise), so convert, as the validator does (#154 Codex final).
+            out.add(offered instanceof org.julclang.ledger.Value v ? org.julclang.state.api.ValueAdapter.fromWire(v) : offered);
+        }
         return out;
     }
 

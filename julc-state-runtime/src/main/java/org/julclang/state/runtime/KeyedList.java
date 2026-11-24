@@ -257,6 +257,12 @@ public final class KeyedList<S, R> {
             if (type.signedKey() && !Arrays.equals(key, callerPkh)) {
                 throw new RequireException(what + ": the key must be the caller's key hash (signedKey, I53)");
             }
+            // A host's reserved, not yet final transaction that inserts, burns or relinks this key's token decides it
+            // first: a rollback or settlement can change the listing, so the caller waits, before the duplicate and the
+            // cooldown checks (#156 Codex review).
+            if (rt.hostedCall() && rt.claimStore().reservesToken(unit(key))) {
+                throw new CallScope.Refusal("pending", what + ": key " + keyHex + " is held by a transaction that is not final");
+            }
             var all = listing();
             Listed<R> anchor = predecessor(all, keyHex);
             String after = HexUtil.encodeHexString(anchor.node().next());
