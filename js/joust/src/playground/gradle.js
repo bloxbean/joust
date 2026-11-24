@@ -80,6 +80,12 @@ export function windowsCommandProblem(path) {
 export function gradleBuild(root, { env = process.env, isTrusted = trusted, platform = process.platform } = {}) {
   const project = realpathSync(root);
   const buildRoot = gradleBuildRoot(project, env, isTrusted);
+  // Gradle searches upwards for a settings file itself: without one in this trusted root it would evaluate an
+  // ancestor's (perhaps another user's). So the build must have its own.
+  if (!['settings.gradle', 'settings.gradle.kts'].some((f) => { try { return lstatSync(join(buildRoot, f)).isFile(); } catch { return false; } })) {
+    fail(`no settings.gradle at or above ${project} in a directory you own (or list in JOUST_SAFE_DIRS): Gradle would look`
+      + ' further up for one itself; add a settings.gradle to the build');
+  }
   const gradlew = join(buildRoot, platform === 'win32' ? 'gradlew.bat' : 'gradlew');
   try {
     if (!statSync(gradlew).isFile()) throw new Error();
@@ -402,6 +408,7 @@ export function snapshotLaunch(spec, { base = tmpdir() } = {}) {
 }
 
 const VERSIONED = /^META-INF\/versions\/\d+\/(.+)$/;
+const GRADLE_CACHE = /\/caches\/modules-2\/files-2\.1\/[^/]+\/[^/]+\/[^/]+\/[0-9a-f]+\/[^/]+\.jar$/;
 
 /**
  * The contracts in a verified snapshot, as the npm build's contracts.json has them ({ description: JSON text, script }),
@@ -446,7 +453,8 @@ export function snapshotContracts(entries) {
       }
       const owner = entries.find((e) => e.names.has(classFile));
       if (!owner) fail(`${title}: its validator ${classFile} is not in the snapshot`);
-      const same = [...owner.names].filter((n) => !VERSIONED.test(n) && (n === `${validator}.class` || n.endsWith(`/${validator}.class`)));
+      // As ValidatorScripts.Container.classesNamed counts them: every entry of that simple name, META-INF/versions included.
+      const same = [...owner.names].filter((n) => n === `${validator}.class` || n.endsWith(`/${validator}.class`));
       if (same.length > 1) fail(`${title}: the entry holding ${classFile} holds ${same.length} classes named ${validator}, which share one script resource`);
       const plutus = owner.resources.get(`META-INF/plutus/${validator}.plutus.json`);
       if (!plutus) fail(`${title}: no compiled script META-INF/plutus/${validator}.plutus.json beside ${classFile}`);
@@ -482,8 +490,8 @@ function inventory(dir) {
 /**
  * Whether the live build is still exactly the one a snapshot was verified against: the spec's bytes, each launch
  * directory's inventory and contents (hashed, not by size and time), each jar of the build itself (under its root)
- * hashed, and each dependency jar (Gradle's cache) by its file identity at the copy. Any doubt (a file gone, a link, a
- * FIFO) counts as changed.
+ * hashed, and each jar hashed too, except a module in Gradle's dependency cache (immutable), checked by its file identity
+ * at the copy. Any doubt (a file gone, a link, a FIFO) counts as changed.
  */
 export function isCurrent({ project, buildRoot, raw, spec, entries }) {
   try {
@@ -496,9 +504,11 @@ export function isCurrent({ project, buildRoot, raw, spec, entries }) {
         const want = Object.keys(e.files).sort(utf8Order);
         if (names.length !== want.length || names.some((n, k) => n !== want[k])) return false;
         for (const rel of want) if (sha(readRegular(join(e.path, ...rel.split('/')))) !== e.files[rel]) return false;
-      } else if (within(buildRoot, e.path)) {
+      } else if (!GRADLE_CACHE.test(e.path.split(sep).join('/'))) {
+        // The build's own jars, local file dependencies, composite builds' outputs: hashed.
         if (sha(readRegular(e.path)) !== e.sha256) return false;
       } else {
+        // A module in Gradle's dependency cache (files-2.1/<group>/<module>/<version>/<sha1>/): immutable once written.
         const r = entries[i].stat;
         if (!r || st.size !== r.size || st.mtimeMs !== r.mtimeMs || st.ino !== r.ino || st.dev !== r.dev) return false;
       }
@@ -572,14 +582,25 @@ export function launchGradleHost({ java, classPath, project, onExit, deadlineMs,
  * other files than the spec lists, runs the build (once) and copies again.
  *
  * @param o.built     the command already ran the build (default true)
+ * @param o.gatedSpec the spec's bytes right after that gated build (default: read now). A first open whose spec differs
+ *                    (a bare `./gradlew joustHostSpec` since, which skips the gates) runs the build again.
  * @param o.gradle    (tasks) => Promise, for tests (default runGradle on the project's wrapper)
  * @param o.onCopied  () => void after each copy, for tests (a rebuild between the reads)
  */
-export function gradleSource(root, { built = true, gradle, log = console.log, base, launch = launchGradleHost,
+export function gradleSource(root, { built = true, gatedSpec, gradle, log = console.log, base, launch = launchGradleHost,
   onCopied = () => {}, env, isTrusted } = {}) {
   const build = gradleBuild(root, { env, isTrusted });
   const run = gradle ?? ((tasks) => runGradle(build, tasks, { log }));
   sweepSnapshots({ base });
+  const specNow = () => {
+    try {
+      return readSpecBytes(build.project);
+    } catch {
+      return null;
+    }
+  };
+  // The spec bytes the last gated build (`build joustHostSpec`) wrote: a session runs only those.
+  let gated = built ? (gatedSpec ?? specNow()) : null;
   let previous = null;     // () => whether the last opened build is still current
   let first = true;
   let queue = Promise.resolve();
@@ -591,10 +612,16 @@ export function gradleSource(root, { built = true, gradle, log = console.log, ba
       if (needBuild) {
         log('joust playground: the build changed: ./gradlew build joustHostSpec');
         await run(['build', 'joustHostSpec']);
+        gated = specNow();
         needBuild = false;
         ran = true;
       }
       const raw = readSpecBytes(build.project);
+      // Another spec than the gated build wrote (a bare joustHostSpec since): build again, gates included.
+      if (!gated || !raw.equals(gated)) {
+        needBuild = true;
+        continue;
+      }
       const spec = parseHostSpec(raw);
       const java = checkJdk(spec.java);
       let snap;

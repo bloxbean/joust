@@ -37,6 +37,8 @@ export function readJar(bytes, what = 'jar') {
     const extraLen = bytes.readUInt16LE(p + 30);
     const commentLen = bytes.readUInt16LE(p + 32);
     const local = bytes.readUInt32LE(p + 42);
+    // Each record within the central directory, whose end is the end record's start.
+    if (p + 46 + nameLen + extraLen + commentLen > eocd) fail('a central directory record past its end');
     const name = bytes.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
     // A file name twice: which copy a class loader takes is the zip implementation's choice, so neither is taken. A
@@ -47,6 +49,9 @@ export function readJar(bytes, what = 'jar') {
     }
     entries.set(name, { flags, method, compressed, uncompressed, local });
   }
+  // Exactly the declared number of records fills it: the JDK recounts the headers when the count is understated, and
+  // would see entries this reader did not.
+  if (p !== eocd) fail('the central directory holds other records than its end record counts');
   return {
     names: [...entries.keys()],
     read(name) {

@@ -18,7 +18,7 @@ import {
   symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { crc32 } from 'node:zlib';
 import {
   GradleLaunchError, JVM_ARGS, MAIN_CLASS, SNAPSHOT_PREFIX, SPEC_PATH, checkJdk, gradleBuild, gradleSource, isGradleProject,
@@ -360,12 +360,72 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     assert.equal(gradleBuild(sub).gradlew, join(p.root, 'gradlew'), 'a trusted ancestor\'s build');
     // The ancestor belongs to someone else (or is shared): its settings and wrapper are never used.
     const foreign = (d) => d !== p.root;
+    // Without a settings file of its own, Gradle would search upwards itself and evaluate the foreign one: refused.
+    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /no settings\.gradle at or above .*app in a directory you own.*add a settings\.gradle/);
+    // With its own settings file, the project is its own build, with its own wrapper.
+    writeFileSync(join(sub, 'settings.gradle.kts'), '');
     assert.deepEqual(gradleBuild(sub, { isTrusted: foreign }), { project: sub, buildRoot: sub, gradlew: join(sub, 'gradlew') });
+    rmSync(join(sub, 'settings.gradle.kts'));
     // JOUST_SAFE_DIRS: the default trust (this user's directories, or the listed ones) admits the ancestor again.
     assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
+    writeFileSync(join(sub, 'settings.gradle'), '');
     rmSync(join(sub, 'gradlew'));
     assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /no executable Gradle wrapper at .*app\/gradlew/);
+    // A settings file that is a link (or a directory) does not count.
+    rmSync(join(sub, 'settings.gradle'));
+    symlinkSync(join(p.root, 'settings.gradle'), join(sub, 'settings.gradle'));
+    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /no settings\.gradle at or above/);
   });
+
+  test('the first session runs only the spec the gated startup build wrote; a bare joustHostSpec since builds again', async () => {
+    const p = project();
+    const b = base();
+    const runs = [];
+    const gatedSpec = readFileSync(join(p.root, SPEC_PATH));       // what `build joustHostSpec` wrote at startup
+    // Before the page opens, the developer runs `./gradlew joustHostSpec` alone (no checkJscAbi): generation B.
+    writeFileSync(join(p.classes, 'app/Counter.class'), 'generation B, never gated');
+    p.writeSpec();
+    const source = gradleSource(p.root, { base: b, log: () => {}, launch: () => ({}), gatedSpec,
+      gradle: async (tasks) => { runs.push(tasks); p.writeSpec(); } });
+    const s = await source.open();
+    assert.deepEqual(runs, [['build', 'joustHostSpec']], 'the gates ran for the build the session runs');
+    assert.equal(s.digest, readHostSpec(p.root).digest);
+    // The next open of the same, gated build: no build.
+    const again = await source.open();
+    assert.deepEqual(runs.length, 1);
+    for (const x of [s, again]) x.dispose();
+  });
+
+  test('jars outside the build are hashed for I6; only Gradle\'s immutable dependency cache is checked by identity', async () => {
+    const p = project();
+    const b = base();
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'joust-pg-localjar-')));
+    made.push(outside);
+    const local = join(outside, 'local.jar');
+    writeFileSync(local, zip({ 'loc/A.class': 'aaaa' }));
+    const cached = join(outside, 'caches/modules-2/files-2.1/org.x/lib/1.0/0a1b2c/lib-1.0.jar');
+    mkdirSync(dirname(cached), { recursive: true });
+    writeFileSync(cached, zip({ 'lib/B.class': 'bbbb' }));
+    p.writeSpec(specFor([...p.entries, { kind: 'jar', path: local }, { kind: 'jar', path: cached }]));
+    const s = await gradleSource(p.root, { base: b, log: () => {}, launch: () => ({}) }).open();
+    assert.equal(s.stale(), false);
+    // A local file dependency restored in place: same size, inode and time, other bytes.
+    const sameSize = (f, from, to) => {
+      const { atime, mtime } = statSync(f);
+      writeFileSync(f, readFileSync(f).toString('latin1').replace(from, to), 'latin1');
+      utimesSync(f, atime, mtime);
+    };
+    sameSize(local, 'aaaa', 'AAAA');
+    assert.equal(s.stale(), true, 'a local jar outside the build root is hashed');
+    sameSize(local, 'AAAA', 'aaaa');
+    assert.equal(s.stale(), false);
+    // A module in Gradle's cache is immutable: its identity is what is checked (a new time is a change).
+    const t = new Date(Date.now() - 60_000);
+    utimesSync(cached, t, t);
+    assert.equal(s.stale(), true);
+    s.dispose();
+  });
+
 
   test('Windows: a wrapper path cmd.exe would interpret is refused', () => {
     for (const c of ['&', '^', '%', '(', ')', '!', '"', '<', '>', '|']) {
@@ -484,6 +544,19 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     assert.throws(() => snapshotLaunch(readHostSpec(p.root), { base: base() }), /manifest Class-Path/);
   });
 
+  test('the central directory holds exactly the records its end record counts, each within it', () => {
+    const two = zip({ 'a.class': '1', 'b.class': '2' });
+    assert.deepEqual(readJar(two).names, ['a.class', 'b.class']);
+    const under = Buffer.from(two);
+    under.writeUInt16LE(1, under.length - 14);   // total entries: 1 of 2
+    under.writeUInt16LE(1, under.length - 12);
+    assert.throws(() => readJar(under), /other records than its end record counts/);
+    const past = Buffer.from(two);
+    const cd = past.readUInt32LE(past.length - 6);
+    past.writeUInt16LE(400, cd + 46 + 7 + 28);   // the second record's name runs past the directory
+    assert.throws(() => readJar(past), /a central directory record past its end/);
+  });
+
   test('the zip\'s end record must end the file, and the central directory end where it starts', () => {
     const good = zip({ 'a.class': '1' });
     assert.deepEqual(readJar(good).names, ['a.class']);
@@ -506,6 +579,14 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     p.writeSpec();
     snap = snapshotLaunch(readHostSpec(p.root), { base: base() });
     assert.throws(() => snapshotContracts(snap.entries), /versions the JOUST resource/);
+    snap.dispose();
+    // The owner jar's count of classes of the validator's simple name is ValidatorScripts': every entry, versions included.
+    writeFileSync(p.sibling, zip({ 'lib/OtherValidator.class': 'class', 'META-INF/versions/25/x/OtherValidator.class': 'v',
+      'META-INF/joust/lib.Other.json': description('lib.Other', 'lib', 'OtherValidator'), 'META-INF/plutus/OtherValidator.plutus.json': PLUTUS },
+    { manifest: 'Manifest-Version: 1.0\r\n\r\n' }));
+    p.writeSpec();
+    snap = snapshotLaunch(readHostSpec(p.root), { base: base() });
+    assert.throws(() => snapshotContracts(snap.entries), /lib\.Other: the entry holding lib\/OtherValidator\.class holds 2 classes named OtherValidator/);
     snap.dispose();
     // Without Multi-Release the JVM ignores META-INF/versions: so does the playground.
     writeFileSync(p.sibling, zip({ 'META-INF/versions/25/app/CounterValidator.class': 'v25' }, { manifest: 'Manifest-Version: 1.0\r\n\r\n' }));

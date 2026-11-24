@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
 import { pageFiles } from './page.js';
 import { startPlayground } from './server.js';
-import { gradleBuild, gradleSource, isGradleProject, runGradle } from './gradle.js';
+import { gradleBuild, gradleSource, isGradleProject, readSpecBytes, runGradle } from './gradle.js';
 
 /**
  * @param o.config     joust.config.json (loadConfig())
@@ -75,7 +75,8 @@ async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }
   } catch (e) {
     throw new Error(`joust playground: the build failed: ${e.message}`);
   }
-  const source = gradleSource(build.project, { log });
+  // The spec this gated build wrote: the first session runs it, or builds again (gates included) if it changed since.
+  const source = gradleSource(build.project, { log, gatedSpec: readSpecBytes(build.project) });
   const { loadEngine } = await import('@julclang/joust-runtime');
   const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
   const server = await startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source });
