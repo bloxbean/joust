@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.core.types.JulcMap;
@@ -102,8 +101,8 @@ public final class JsonValues {
                 catch (org.julclang.state.runtime.described.SchemaCodec.DataError e) { throw new BadValue(e.getMessage()); }
             }
             try {
-                return PlutusDataCborDecoder.decode(cbor);
-            } catch (RuntimeException | StackOverflowError e) {   // the HTTP codec's decoder may overflow on deep nesting
+                return org.julclang.state.runtime.PlutusBytes.decode(cbor);   // iterative: any depth decodes
+            } catch (RuntimeException e) {
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }

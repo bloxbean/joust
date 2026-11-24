@@ -196,7 +196,13 @@ class PlutusBytesTest {
         }
         for (String v : values) {
             byte[] b = HEX.parseHex(v);
-            if (b.length > 0 && (b[0] & 0xff) == 0x84) transactionData(b, data);
+            if (b.length > 0 && (b[0] & 0xff) == 0x84) {
+                try {
+                    transactionData(b, data);
+                } catch (RuntimeException malformed) {
+                    // a page verifier's rejection vector (fixtures/host/verifier/reject-malformed-*): not a transaction
+                }
+            }
         }
         int accepted = 0;
         for (String v : values) accepted += agree(HEX.parseHex(v), v) ? 1 : 0;
