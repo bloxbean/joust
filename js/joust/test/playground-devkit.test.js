@@ -6,8 +6,8 @@
 //   journal (Q6, ADR-0022 D8): validated whole, locked atomically, keyed by chain, pruned safely, restored after a restart
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync,
-  writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync,
+  unlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createServer, request } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -1633,9 +1633,13 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
   });
 
   test('FD4: SIGHUP stops joust playground as Ctrl-C does', async () => {
-    const bin = join(root, 'node_modules/@julclang/joust/bin/joust.js');
-    const p = spawn(process.execPath, [existsSync(bin) ? bin : join(repo, 'js/joust/bin/joust.js'), 'playground', '--no-open'],
-      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own project, with this checkout's whole @julclang/joust installed (joust hands over to the project's copy;
+    // the shared test project's copy holds the dev host's files only). No session starts: no page opens it.
+    const own = await project();
+    rmSync(join(own, 'node_modules/@julclang/joust'), { recursive: true, force: true });
+    symlinkSync(join(repo, 'js/joust'), join(own, 'node_modules/@julclang/joust'), 'dir');
+    const p = spawn(process.execPath, [join(repo, 'js/joust/bin/joust.js'), 'playground', '--no-open'],
+      { cwd: own, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { out += d; });
@@ -1644,6 +1648,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     assert.match(out, /Ctrl-C stops the playground/);
     p.kill('SIGHUP');
     const r = await exited;
+    rmSync(own, { recursive: true, force: true });
     assert.deepEqual(r, { code: 0, signal: null }, out);
   });
 
