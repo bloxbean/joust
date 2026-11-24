@@ -49,16 +49,23 @@ export function operationRequest(r) {
  */
 export async function reconcile(record, { lookup, settlementSlots = 0 }) {
   if (!record.attempts.length) return { state: 'fresh' };
+  // Every attempt is looked up before anything is decided: a verified final one closes the operation; otherwise a
+  // shallow inclusion waits, and any lookup without a stable observation keeps it pending (never ambiguous).
   let tip = null;
+  let unknown = false;
+  let shallow = null;
   for (const a of record.attempts) {
     const r = await lookup(a.txHash);
-    tip = r?.tip ?? null;
-    // Closed only when final (past the settlement margin): a shallow inclusion may roll back, so it waits, and is
-    // looked up again on the next try (if it disappears, recovery goes on as before it was seen).
     if (r?.landed && r.final !== false) return { state: 'closed', txHash: a.txHash };
-    if (r?.landed) return { state: 'pending', until: Number.isSafeInteger(r.slot) ? r.slot + settlementSlots : null, shallow: a.txHash };
+    if (r?.tip === null || r?.tip === undefined) {
+      unknown = true;
+      continue;
+    }
+    tip = Math.max(tip ?? r.tip, r.tip);
+    if (r.landed && !shallow) shallow = { txHash: a.txHash, until: Number.isSafeInteger(r.slot) ? r.slot + settlementSlots : null };
   }
-  if (tip === null || tip === undefined) return { state: 'pending', until: null };
+  if (shallow) return { state: 'pending', until: shallow.until, shallow: shallow.txHash };
+  if (unknown || tip === null) return { state: 'pending', until: null };
   const live = record.attempts.filter((a) => safeSlot(a.validTo) + settlementSlots >= tip);
   return live.length ? { state: 'pending', until: Math.max(...live.map((a) => safeSlot(a.validTo) + settlementSlots)) } : { state: 'ambiguous' };
 }

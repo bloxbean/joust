@@ -304,6 +304,27 @@ describe('ADR-0024 M4 keyed operations and windows (#180 round 1)', () => {
     assert.equal(decide(record, back), 'reuse');
     assert.equal(operationRequest(record).designated, 'de'.repeat(32) + '#0', 'the original designation');
   });
+  test('the final poll clears only the record it watched: a record closed and started again survives (Codex M4 last3)', () => {
+    const rec = (designated, attempts) => ({ id: 'op', contract: 'c', method: 'init', instance: null, key: null, payer: 'addr_test1x',
+      designated, attempts });
+    const watched = rec('de'.repeat(32) + '#0', [{ txHash: 'ab'.repeat(32), validTo: 9 }]);
+    assert.deepEqual(applyOperation([watched], { action: 'removeIfFinal', id: 'op', designated: watched.designated, txHash: 'ab'.repeat(32) }).rows, []);
+    // The user closed it and started another under the same id: the old poll's report leaves the new record alone.
+    const restarted = rec('ef'.repeat(32) + '#1', [{ txHash: 'cd'.repeat(32), validTo: 20 }]);
+    assert.deepEqual(applyOperation([restarted], { action: 'removeIfFinal', id: 'op', designated: watched.designated, txHash: 'ab'.repeat(32) }).rows,
+      [restarted]);
+    const sameInputNewTx = rec(watched.designated, [{ txHash: 'cd'.repeat(32), validTo: 20 }]);
+    assert.deepEqual(applyOperation([sameInputNewTx], { action: 'removeIfFinal', id: 'op', designated: watched.designated, txHash: 'ab'.repeat(32) }).rows,
+      [sameInputNewTx], 'another attempt: kept');
+  });
+  test('reconcile looks every attempt up: an unknown observation keeps it pending, never ambiguous; a final one closes (Codex M4 last3)', async () => {
+    const two = { attempts: [{ txHash: 'a', validTo: 10 }, { txHash: 'b', validTo: 10 }] };
+    const answers = { a: { landed: false, final: false, slot: null, tip: null }, b: { landed: false, final: false, slot: null, tip: 999 } };
+    assert.deepEqual(await reconcile(two, { lookup: async (h) => answers[h], settlementSlots: 5 }), { state: 'pending', until: null },
+      'the first lookup unknown, the second absent and expired: pending');
+    answers.b = { landed: true, final: true, slot: 8, tip: 999 };
+    assert.equal((await reconcile(two, { lookup: async (h) => answers[h], settlementSlots: 5 })).state, 'closed', 'a verified final attempt closes it');
+  });
   test('keyed calls are for the page\'s identities: a connected CIP-30 wallet gets them disabled, with the reason (Codex M4 last)', () => {
     assert.match(keyedRefusal({ cip30: true }, true), /connected wallet come later; use a test identity/);
     assert.equal(keyedRefusal({ cip30: true }, false), null, 'its other calls stay');
