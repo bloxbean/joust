@@ -255,7 +255,7 @@ describe('ADR-0024 M3 I4: DevKit only', () => {
         return [];
       },
     };
-    const a = await chainReads(chain)({ kind: 'utxos', address: 'addr_test1x' });
+    const a = await chainReads(chain)({ kind: 'utxos', address: 'addr_test1' + 'q'.repeat(50) });
     assert.equal(reads, 2);
     assert.deepEqual(a, { tip: { slot: 11, hash: sha('b11'), height: 11 }, absent: true });
     const stuck = { tip: async () => ({ slot: slot++, hash: sha('b' + slot), height: slot }), protocolParams: async () => ({}) };
