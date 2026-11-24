@@ -111,6 +111,9 @@ function readData(r) {
         if (pair.major !== 4 || (pair.n !== 2n && pair.n !== null)) throw new CborError('tag 102 needs [index, fields]');
         const index = head(r);
         if (index.major !== 0 || index.n === null) throw new CborError('tag 102: a constructor index');
+        // The model keeps the index as a Number: refuse one it cannot hold exactly (two distinct indices would compare
+        // equal) rather than round it.
+        if (index.n > BigInt(Number.MAX_SAFE_INTEGER)) throw new CborError('tag 102: a constructor index beyond 2^53 - 1');
         d = { constr: Number(index.n), fields: listOf(r) };
         if (pair.n === null) {
           if (!isBreak(r)) throw new CborError('tag 102 needs [index, fields]');

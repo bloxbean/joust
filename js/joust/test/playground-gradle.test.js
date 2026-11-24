@@ -18,7 +18,7 @@ import {
   symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { crc32 } from 'node:zlib';
 import {
   GradleLaunchError, JVM_ARGS, MAIN_CLASS, SNAPSHOT_PREFIX, SPEC_PATH, checkJdk, gradleBuild, gradleSource, isGradleProject,
@@ -126,6 +126,7 @@ function fakeProject() {
   return { root, classes, sibling, dep, entries, writeSpec };
 }
 const snapshots = (base) => readdirSync(base).filter((n) => n.startsWith('joust-playground-snapshot-'));
+const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('ADR-0024 M2: the Gradle launch, client side', () => {
   const made = [];
@@ -290,6 +291,14 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     // A repeated directory entry carries nothing: kept once (real jars have them, e.g. archunit's).
     const dirs = Buffer.from(zip({ 'p/': '', 'q/': '', 'p/a.class': '1' }).toString('latin1').replaceAll('q/', 'p/'), 'latin1');
     assert.deepEqual(readJar(dirs).names.filter((n) => n === 'p/'), ['p/']);
+    // Other repeats that nothing reads (a licence file) keep their first copy; what the launch or the JVM reads never.
+    const twin = (a, b, files) => Buffer.from(zip(files).toString('latin1').replaceAll(b, a), 'latin1');
+    const lic = readJar(twin('META-INF/LICENSE.txt', 'META-INF/LICENSE.TXu', { 'META-INF/LICENSE.txt': 'first', 'META-INF/LICENSE.TXu': 'other' }));
+    assert.equal(lic.read('META-INF/LICENSE.txt').toString(), 'first');
+    for (const [a, b] of [['META-INF/MANIFEST.MF', 'META-INF/MANIFEST.MG'], ['META-INF/joust/x.json', 'META-INF/joust/y.json'],
+      ['META-INF/plutus/X.plutus.json', 'META-INF/plutus/Y.plutus.json'], ['META-INF/versions/25/a.txt', 'META-INF/versions/25/b.txt']]) {
+      assert.throws(() => readJar(twin(a, b, { [a]: '1', [b]: '2' })), /appears twice/, a);
+    }
   });
 
   test('the JVM host is launched with exactly the protocol\'s arguments, from the project, with the allow-listed environment', () => {
@@ -361,7 +370,7 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     // The ancestor belongs to someone else (or is shared): its settings and wrapper are never used.
     const foreign = (d) => d !== p.root;
     // Without a settings file of its own, Gradle would search upwards itself and evaluate the foreign one: refused.
-    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), /no settings\.gradle at or above .*app in a directory you own.*add a settings\.gradle/);
+    assert.throws(() => gradleBuild(sub, { isTrusted: foreign }), new RegExp(`${esc(p.root)} holds the build's settings file but is not yours.*list it in JOUST_SAFE_DIRS if you trust it`));
     // With its own settings file, the project is its own build, with its own wrapper.
     writeFileSync(join(sub, 'settings.gradle.kts'), '');
     assert.deepEqual(gradleBuild(sub, { isTrusted: foreign }), { project: sub, buildRoot: sub, gradlew: join(sub, 'gradlew') });
@@ -380,11 +389,11 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
   test('the settings file checked is the one Gradle takes: one of the two, a regular file, in a root others cannot write', () => {
     const p = project();
     writeFileSync(join(p.root, 'settings.gradle.kts'), '');
-    assert.throws(() => gradleBuild(p.root), /has both settings\.gradle and settings\.gradle\.kts: keep one/);
+    assert.throws(() => gradleBuild(p.root), /has settings\.gradle and settings\.gradle\.kts: keep one/);
     // A linked settings.gradle beside a regular settings.gradle.kts: still both (Gradle takes the link first).
     rmSync(join(p.root, 'settings.gradle'));
     symlinkSync(join(p.root, 'build.gradle'), join(p.root, 'settings.gradle'));
-    assert.throws(() => gradleBuild(p.root), /has both/);
+    assert.throws(() => gradleBuild(p.root), /has settings\.gradle and settings\.gradle\.kts: keep one/);
     rmSync(join(p.root, 'settings.gradle.kts'));
     assert.throws(() => gradleBuild(p.root), /settings\.gradle is not a regular file \(a link, say\)/);
     rmSync(join(p.root, 'settings.gradle'));
@@ -396,11 +405,150 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     writeFileSync(join(sub, 'build.gradle'), '');
     chmodSync(p.root, 0o775);
     try {
-      assert.throws(() => gradleBuild(sub), /no settings\.gradle at or above .*app/);
+      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w ${esc(p.root)} `));
       assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'unless listed in JOUST_SAFE_DIRS');
     } finally {
       chmodSync(p.root, 0o700);
     }
+  });
+
+  test('the build root itself must be trusted: a project others can write is refused unless listed; sticky is not enough', () => {
+    const p = project();
+    chmodSync(p.root, 0o775);
+    try {
+      assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(p.root)} is writable by others, so another account could change what Gradle runs\\. Fix .*: chmod go-w ${esc(p.root)} \\(or list`));
+      assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
+      // A sticky shared ancestor still lets another account create a settings file there: not walked into either.
+      const sub = join(p.root, 'app');
+      mkdirSync(sub);
+      chmodSync(sub, 0o755);
+      writeFileSync(join(sub, 'build.gradle'), '');
+      chmodSync(p.root, 0o1777);
+      assert.throws(() => gradleBuild(sub), new RegExp(`${esc(p.root)} is writable by others.*chmod go-w ${esc(p.root)} `));
+      assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root);
+    } finally {
+      chmodSync(p.root, 0o700);
+    }
+  });
+
+  test('the settings file and the wrapper themselves must be yours and writable by nobody else, unless the root is listed', () => {
+    const p = project();
+    chmodSync(p.root, 0o755);
+    const settings = join(p.root, 'settings.gradle');
+    const gradlew = join(p.root, 'gradlew');
+    chmodSync(settings, 0o664);
+    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(settings)} is writable by others.*chmod go-w ${esc(settings)} \\(`));
+    assert.equal(gradleBuild(p.root, { env: { JOUST_SAFE_DIRS: p.root } }).buildRoot, p.root, 'listed: accepted');
+    chmodSync(settings, 0o644);
+    chmodSync(gradlew, 0o775);
+    assert.throws(() => gradleBuild(p.root), new RegExp(`${esc(gradlew)} is writable by others.*chmod go-w ${esc(gradlew)} \\(`));
+    chmodSync(gradlew, 0o755);
+    assert.equal(gradleBuild(p.root).gradlew, gradlew);
+  });
+
+  test('a listed root does not vouch for a writable directory below it (the walk from the project)', () => {
+    const p = project();
+    const sub = join(p.root, 'sub');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'build.gradle'), '');
+    chmodSync(sub, 0o777);
+    try {
+      assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p.root } }),
+        new RegExp(`: ${esc(sub)} is writable by others.*chmod go-w ${esc(sub)} \\(or list ${esc(sub)} in JOUST_SAFE_DIRS\\)`));
+      assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [p.root, sub].join(delimiter) } }).buildRoot, p.root);
+    } finally {
+      chmodSync(sub, 0o755);
+    }
+  });
+
+  test('a linked wrapper is refused like a linked settings file', () => {
+    const p = project();
+    const real = join(p.root, 'real-gradlew');
+    writeFileSync(real, '#!/bin/sh\n');
+    chmodSync(real, 0o755);
+    rmSync(join(p.root, 'gradlew'));
+    symlinkSync(real, join(p.root, 'gradlew'));
+    assert.throws(() => gradleBuild(p.root), /gradlew is a link: the playground runs the build's own wrapper, a regular file/);
+  });
+
+  test('umask 002 (joust new, git clone): every writable path is named in one refusal, fixed by its one chmod line', { skip: process.platform === 'win32' && 'POSIX modes' }, () => {
+    const old = process.umask(0o002);
+    let p;
+    let sub;
+    try {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'joust-pg-umask-')));
+      made.push(root);
+      p = join(root, 'build');
+      sub = join(p, 'contracts', 'app');
+      mkdirSync(sub, { recursive: true, mode: 0o777 });
+      writeFileSync(join(p, 'settings.gradle'), "include 'contracts:app'\n", { mode: 0o666 });
+      writeFileSync(join(sub, 'build.gradle'), '', { mode: 0o666 });
+      writeFileSync(join(p, 'gradlew'), '#!/bin/sh\n', { mode: 0o777 });
+    } finally {
+      process.umask(old);
+    }
+    assert.equal(statSync(sub).mode & 0o777, 0o775);
+    const paths = [sub, dirname(sub), p, join(p, 'settings.gradle'), join(p, 'gradlew')];
+    let message = '';
+    try {
+      gradleBuild(sub);
+    } catch (e) {
+      message = e.message;
+    }
+    assert.match(message, new RegExp(`^${esc(paths.join(', '))} are writable by others`));
+    const line = /chmod go-w [^(]+/.exec(message)[0].trim();
+    assert.equal(line, `chmod go-w ${paths.join(' ')}`);
+    assert.match(message, new RegExp(`or list ${esc([sub, dirname(sub), p].join(' and '))} in JOUST_SAFE_DIRS`));
+    // Listing the root vouches for its settings file and wrapper, not for the directories below it (FG6).
+    assert.throws(() => gradleBuild(sub, { env: { JOUST_SAFE_DIRS: p } }),
+      new RegExp(`: ${esc([sub, dirname(sub)].join(', '))} are writable by others.*chmod go-w ${esc([sub, dirname(sub)].join(' '))} \\(or list`));
+    assert.equal(gradleBuild(sub, { env: { JOUST_SAFE_DIRS: [sub, dirname(sub), p].join(delimiter) } }).buildRoot, p, 'or each listed');
+    assert.equal(spawnSync('sh', ['-c', line]).status, 0);
+    assert.deepEqual(gradleBuild(sub), { project: sub, buildRoot: p, gradlew: join(p, 'gradlew') }, 'the printed line fixes it');
+  });
+
+  test('settings.gradle.dcl counts: the nearer directory holding one is the root, one candidate only, no link', () => {
+    const p = project();
+    const sub = join(p.root, 'app');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'build.gradle'), '');
+    writeFileSync(join(sub, 'gradlew'), '#!/bin/sh\n');
+    chmodSync(join(sub, 'gradlew'), 0o755);
+    writeFileSync(join(sub, 'settings.gradle.dcl'), '');
+    assert.equal(gradleBuild(sub).buildRoot, sub, 'Gradle would take the nearer DCL settings: so is it checked');
+    writeFileSync(join(sub, 'settings.gradle.kts'), '');
+    assert.throws(() => gradleBuild(sub), /has settings\.gradle\.kts and settings\.gradle\.dcl: keep one/);
+    rmSync(join(sub, 'settings.gradle.kts'));
+    rmSync(join(sub, 'settings.gradle.dcl'));
+    symlinkSync(join(p.root, 'settings.gradle'), join(sub, 'settings.gradle.dcl'));
+    assert.throws(() => gradleBuild(sub), /settings\.gradle\.dcl is not a regular file \(a link, say\)/);
+  });
+
+  test('a browser opener that exits non-zero (xdg-open without a browser) prints one fresh pairing link, unless paired', async () => {
+    const { announce } = await import('../src/playground/index.js');
+    const run = async ({ pairFirst = false, events = [['exit', 1, null]] } = {}) => {
+      const lines = [];
+      let onPaired;
+      let codes = 0;
+      const server = { port: 1, pairingUrl: () => `http://127.0.0.1:1/#pair=${String(++codes).padStart(32, 'a')}`, close: async () => {} };
+      const opener = () => {
+        const child = new EventEmitter();
+        child.unref = () => child;
+        setImmediate(() => { if (pairFirst) onPaired(); for (const [e, ...a] of events) child.emit(e, ...a); });
+        return child;
+      };
+      const s = await announce(async (o) => { onPaired = o.onPaired; return server; }, { open: true, log: (l) => lines.push(l), mode: 'test', spawnOpener: opener });
+      await new Promise((r) => setTimeout(r, 20));
+      await s.close();
+      return lines.filter((l) => /#pair=/.test(l));
+    };
+    const failed = await run();
+    assert.equal(failed.length, 1);
+    assert.match(failed[0], /no browser could be opened; open this link: http:\/\/127\.0\.0\.1:1\/#pair=/);
+    assert.doesNotMatch(failed[0], /#pair=a{31}1/, 'a fresh code, not the one in the launcher file');
+    assert.deepEqual(await run({ pairFirst: true }), [], 'the page paired first: nothing printed');
+    assert.equal((await run({ events: [['error', new Error('ENOENT')], ['exit', -2, null]] })).length, 1, 'once');
+    assert.deepEqual(await run({ events: [['exit', 0, null]] }), [], 'the opener succeeded');
   });
 
   test('the build root and settings are checked again before every rebuild: a settings file removed since is refused', async () => {
@@ -606,6 +754,27 @@ describe('ADR-0024 M2: the Gradle launch, client side', () => {
     const cd = past.readUInt32LE(past.length - 6);
     past.writeUInt16LE(400, cd + 46 + 7 + 28);   // the second record's name runs past the directory
     assert.throws(() => readJar(past), /a central directory record past its end/);
+  });
+
+  test('a ZIP64 end locator before the end record is refused (the JDK would follow it to another central directory)', () => {
+    // The final reviewer's polyglot jar: its 32-bit directory shows one script, the ZIP64 one the JDK reads another.
+    const poly = readFileSync(new URL('./fixtures/playground/zip64-poly.jar', import.meta.url));
+    assert.throws(() => readJar(poly), /ZIP64 is not supported/);
+    // A plain one: a locator (signature 0x07064b50) in the 20 bytes before the end record.
+    const good = zip({ 'a.class': '1' });
+    const eocd = good.length - 22;
+    const locator = Buffer.alloc(20);
+    locator.writeUInt32LE(0x07064b50, 0);
+    assert.throws(() => readJar(Buffer.concat([good.subarray(0, eocd), locator, good.subarray(eocd)])), /ZIP64 is not supported/);
+  });
+
+  test('a compiled script that names cborHex more than once is refused', () => {
+    const p = project();
+    writeFileSync(join(p.classes, 'META-INF/plutus/CounterValidator.plutus.json'), '{"cborHex":"4e4d","cborHex":"4e4e"}');
+    p.writeSpec();
+    const snap = snapshotLaunch(readHostSpec(p.root), { base: base() });
+    assert.throws(() => snapshotContracts(snap.entries), /names cborHex other than once/);
+    snap.dispose();
   });
 
   test('the zip\'s end record must end the file, and the central directory end where it starts', () => {

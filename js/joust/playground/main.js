@@ -8,8 +8,8 @@
 //
 // Every string from the project or the chain is rendered as text (textContent), never as HTML (D8).
 
-import { verifyPrepared, verifyPublication, publicationExpectation, parseTx, walletView, addressParts, paymentKeyHash }
-  from '@julclang/state-client';
+import { verifyPrepared, verifyPublication, publicationExpectation, parseTx, enterpriseAddress, walletView, addressParts,
+  paymentKeyHash } from '@julclang/state-client';
 import { devWallet, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
 import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
 import { assemble } from '@julclang/state-client/ledger';
@@ -65,6 +65,8 @@ async function api(route, body = {}) {
 const sapi = (route, body = {}) => api(route, { session: state.session.session, ...body });
 
 // ---- DOM helpers (text only)
+/** replaceChildren without the holes: replaceChildren(null) would insert the text "null". */
+const fill = (el, ...kids) => el.replaceChildren(...kids.filter((k) => k !== null && k !== undefined && k !== false));
 function h(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -116,12 +118,17 @@ function newIdentity(i) {
     // D5: DevKit's public test mnemonic, by index: test-only keys (anyone can derive them).
     const index = (state.session.identityBase ?? 1) + i;
     const wallet = devWallet({ chain: chainView, mnemonic: DEVKIT_MNEMONIC, index, networkId: 0 });
-    return { label: `${NAMES[i] ?? `Identity ${i + 1}`} (DevKit #${index})`, wallet, address: wallet.address, keyHash: wallet.keyHash,
-      testOnly: true };
+    // As offline: the payment key's enterprise address, where the host pays (and spends from) the identity's key hash;
+    // the faucet tops that address up. (A CIP-30 wallet keeps its own change address.)
+    return { label: `${NAMES[i] ?? `Identity ${i + 1}`} (DevKit #${index})`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0),
+      keyHash: wallet.keyHash, testOnly: true };
   }
   const mnemonic = generateMnemonic(wordlist, 256);
   const wallet = devWallet({ chain: chainView, mnemonic, networkId: 0 });
-  return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: wallet.address, keyHash: wallet.keyHash };
+  // The identity's address is the enterprise address of its payment key: what the dev host pays an identity's key hash
+  // to and spends from (protocol 1: enterprise wallet addresses on the session network), so a payout to it is its own
+  // balance. The wallet signs with that payment key.
+  return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0), keyHash: wallet.keyHash };
 }
 /** Funds an identity: offline from nowhere; on DevKit from its faucet, when it holds less than 100 ADA. */
 async function fund(id) {
@@ -149,10 +156,16 @@ async function startSession(opts = {}) {
   // tab inherits sessionStorage and would end the original tab's live session. The server's bound (four sessions,
   // least recently used ends first) retires abandoned ones.
   state.session = await api('sessions/new', opts);
-  try { sessionStorage.setItem('joust-playground-session', state.session.session); } catch { /* memory only */ }
   if (!state.identities.length) for (let i = 0; i < 3; i++) state.identities.push(newIdentity(i));
   if (!opts.keepLedgerOf || devkit()) for (const id of state.identities) await fund(id);
   state.instance = null;
+  // A new session may run a rebuilt project: its contracts are the new build's (a removed one is dropped).
+  drawContracts();
+  if (state.contract && !state.session.contracts.some((c) => c.name === state.contract.name && c.served)) {
+    state.contract = null;
+    $('contract-title').textContent = 'Choose a contract';
+    for (const id of ['operations', 'instances', 'objects']) $(id).replaceChildren();
+  }
   note(`session ${state.session.session} started (${state.session.mode}, build ${state.session.fingerprint.slice(0, 12)}…)`);
   for (const p of state.session.pruned ?? []) {
     note(`the journal of an earlier DevKit chain (started ${new Date(p.startTime * 1000).toISOString()}, ${p.transactions} `
@@ -176,7 +189,7 @@ function drawBanner() {
   const b = $('banner');
   b.classList.toggle('devkit', s.mode === 'devkit');
   if (s.mode === 'devkit') return drawDevkitBanner(s, b);
-  b.replaceChildren(
+  fill(b,
     h('div', { class: 'mode' },
       h('strong', { text: 'OFFLINE' }), ' ',
       h('span', { text: `in-memory ledger · network id ${s.network.networkId} · slot ${s.slot} · build ${s.fingerprint.slice(0, 12)}…` })),
@@ -194,11 +207,14 @@ function drawBanner() {
         h('li', { text: 'Does not model: rewards (withdrawals take 0), PlutusV1\'s integrity hash, collateral loss on a phase-2 '
           + 'failure, rollbacks.' }))),
     h('div', { class: 'controls' },
-      h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 'attacks', checked: s.attacks, onchange: async (e) => {
-        state.session = await sapi('session/attacks', { enabled: e.target.checked });
-        note(`attack suite ${state.session.attacks ? 'on' : 'off'}`);
-        drawBanner();
-      } }), ' attack suite on every script transaction'),
+      h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 'attacks', checked: s.attacks, onchange: (e) => (state.busy ? drawBanner() : guard(async () => {
+        try {
+          state.session = await sapi('session/attacks', { enabled: e.target.checked });
+          note(`attack suite ${state.session.attacks ? 'on' : 'off'}`);
+        } finally {
+          drawBanner();   // shows the session's actual setting, also after a refusal
+        }
+      })) }), ' attack suite on every script transaction'),
       h('span', { class: 'sep' }),
       h('input', { type: 'text', id: 'advance-seconds', value: '60', size: 6, 'aria-label': 'seconds' }),
       h('button', { id: 'advance', text: 'Advance time (s)', onclick: () => guard(async () => {
@@ -210,7 +226,7 @@ function drawBanner() {
       }) }),
       h('button', { id: 'reset', text: 'Reset ledger', onclick: () => guard(async () => {
         state.session = await sapi('session/reset');
-        try { sessionStorage.setItem('joust-playground-session', state.session.session); } catch { /* memory only */ }
+        drawContracts();
         for (const id of state.identities) await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
         state.instance = null;
         state.history = [];
@@ -256,7 +272,7 @@ async function drawIdentities() {
   for (const [i, id] of state.identities.entries()) {
     const utxos = await chainView.utxosAt(id.address).catch(() => []);
     const lovelace = utxos.reduce((n, u) => n + (u.value.get('lovelace') ?? 0n), 0n);
-    rows.push(h('li', { class: i === state.signer ? 'signer' : '' },
+    rows.push(h('li', { class: i === state.signer ? 'signer' : '', 'data-identity': id.label, 'data-key-hash': id.keyHash, 'data-lovelace': String(lovelace) },
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'signer', checked: i === state.signer, 'data-identity': id.label,
         onchange: () => { state.signer = i; drawIdentities(); drawOperations(); } }), ' ', h('strong', { text: id.label })),
       id.testOnly ? h('span', { class: 'testonly', text: 'test-only' }) : null, id.cip30 ? h('span', { class: 'muted', text: ' CIP-30' }) : null,
@@ -386,7 +402,7 @@ async function drawInstances() {
       onclick: () => guard(async () => { state.instance = it.instance; await drawInstances(); drawOperations(); }) }),
     h('pre', { class: 'state', text: show(it.value) })));
   const foreign = listing.items.length - items.length;
-  box.replaceChildren(h('ul', {}, rows), foreign ? h('p', { class: 'muted', text: `${foreign} other output(s) at the contract address (reference scripts, foreign or old outputs)` }) : null,
+  fill(box, h('ul', {}, rows), foreign ? h('p', { class: 'muted', text: `${foreign} other output(s) at the contract address (reference scripts, foreign or old outputs)` }) : null,
     items.length ? null : h('p', { class: 'muted', text: 'No instance yet: create one below.' }));
   if (state.instance && !items.some((it) => it.instance === state.instance)) state.instance = null;
   await drawObjects();
@@ -554,6 +570,9 @@ async function run(call, meta, form) {
     r = await sapi('prepare', { call: request });
   } catch (e) {
     throw labelled(e, 'host', label);
+  }
+  if (typeof r?.prepared?.cbor !== 'string' || typeof r.prepared.reservation !== 'string') {
+    throw new StageFailure({ stage: 'host', code: 'malformed', message: 'the dev host answered prepare without a prepared body', label });
   }
   // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws) releases
   // the reservation; the server ignores a release of one it already settled.
@@ -741,9 +760,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
           return;
         }
         record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
-        note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)`, 'ok');
-        if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
-        for (const a of res.acceptedAttacks) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
+        confirmedNotes(label, res);
         await refresh();
         resolve(res);
       } catch (e) {
@@ -778,7 +795,7 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
     const states = publication ? null : h('div', { class: 'states' },
       h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
       h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) }));
-    panel.replaceChildren(
+    fill(panel,
       h('h3', { text: publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}` }),
       h('p', { class: 'muted', text: 'The page checked this body itself: everything above the line is read from the body and the chain.' }),
       h('table', {}, lines.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
@@ -895,6 +912,13 @@ async function reconcile(txHash, session = state.session.session, tries = 3) {
   return null;
 }
 
+/** What a confirmation tells, immediate or rechecked: its slot, a settlement the host did not take, accepted attacks. */
+function confirmedNotes(label, res, how = '') {
+  note(`${label}: confirmed in slot ${res.slot} (${res.txHash.slice(0, 16)}…)${how}`, 'ok');
+  if (res.settlement) note(`${label}: the ledger applied it, but the dev host did not take the settlement (${res.settlement}): start a new session`, 'warn');
+  for (const a of res.acceptedAttacks ?? []) note(`${label}: the scripts ACCEPTED the attack "${a.name}" (${a.invariant}): ${a.detail}`, 'warn');
+}
+
 /** An "outcome unknown" entry, checked again against its session's history and updated in place. */
 async function recheck(entry) {
   const res = await reconcile(entry.txHash, entry.session, 1);
@@ -905,7 +929,7 @@ async function recheck(entry) {
   Object.assign(entry, { outcome: 'confirmed', slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks,
     message: `confirmed in slot ${res.slot} (rechecked)` });
   drawHistory();
-  note(`${entry.label}: confirmed in slot ${res.slot} (${entry.txHash.slice(0, 16)}…), rechecked`, 'ok');
+  confirmedNotes(entry.label, { ...res, txHash: entry.txHash }, ', rechecked');
   await refresh();
 }
 
@@ -917,7 +941,7 @@ function drawHistory() {
     h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
     e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
-    e.sites?.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
+    Array.isArray(e.sites) && e.sites.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
     e.txHash ? h('div', {}, h('code', { text: e.txHash })) : null,
     e.outcome === 'outcome unknown' ? h('button', { class: 'recheck', text: 'recheck', onclick: () => guard(() => recheck(e)) }) : null,
     e.attacks !== undefined ? h('div', { class: e.accepted?.length ? 'warn' : 'muted',

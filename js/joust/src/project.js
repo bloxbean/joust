@@ -3,7 +3,7 @@
 // or a package.json depending on @julclang/joust) or part of a Gradle build decides; npm wins in one directory. The
 // walk never enters a directory owned by another user (JOUST_SAFE_DIRS lists exceptions); where Node reports no uid
 // (Windows), it stops at the user's profile directory. Manifests are read only as regular files of at most 64 KiB.
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -77,10 +77,21 @@ function* upwards(start, env) {
  * JOUST_SAFE_DIRS) and never to the filesystem root; else `dir` itself. A settings file or wrapper in a shared or foreign
  * ancestor is never used. `isTrusted` is for tests.
  */
+/** The settings files Gradle 9 looks for in each directory, in its order (a link counts: Gradle follows it). */
+export const SETTINGS_FILES = ['settings.gradle', 'settings.gradle.kts', 'settings.gradle.dcl'];
+const present = (p) => {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export function gradleBuildRoot(dir, env = process.env, isTrusted = trusted) {
   const stop = typeof process.getuid === 'function' ? undefined : resolve(homedir());
   for (let d = resolve(dir); dirname(d) !== d && isTrusted(d, env); d = dirname(d)) {
-    if (isFile(join(d, 'settings.gradle')) || isFile(join(d, 'settings.gradle.kts'))) return d;
+    if (SETTINGS_FILES.some((f) => present(join(d, f)))) return d;
     if (d === stop) break;
   }
   return resolve(dir);

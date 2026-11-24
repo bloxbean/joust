@@ -441,6 +441,19 @@ class PlaygroundTest {
         assertThat(linked.errText()).contains("a link; the playground's cache must be this user's own");
     }
 
+    @Test
+    void aConfiguredCachePathWithDotDotIsRefused() throws IOException {
+        Path target = Files.createDirectories(tmp.resolve("t/inner"));
+        Files.createSymbolicLink(tmp.resolve("alias"), target);
+        FakeSys s = sys(project);
+        s.env.put(Playground.HOME_ENV, tmp.resolve("alias") + "/../cache");
+        assertThat(runOn(s)).isEqualTo(1);
+        assertThat(s.errText()).contains("must not contain `..`");
+        assertThat(s.runs).isEmpty();
+        assertThat(tmp.resolve("cache")).doesNotExist();
+        assertThat(tmp.resolve("t/cache")).doesNotExist();
+    }
+
     /** With a real node and npm: a local tarball installed into the cache with its integrity recorded, then run. */
     @Test
     void aLocalTarballIsInstalledByNpmAndRun() throws Exception {
