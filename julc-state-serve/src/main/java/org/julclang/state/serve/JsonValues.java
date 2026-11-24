@@ -46,8 +46,8 @@ public final class JsonValues {
     public static final JsonValues TYPED = new JsonValues(true, true);
     /**
      * The HTTP service's codec, as it has always behaved: record reflection failures are bad values, a JSON number up
-     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data too
-     * deep to decode is a bad value.
+     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data of any
+     * depth decodes (iteratively; a later overflow is answered 400 by the server).
      */
     public static final JsonValues BAD_VALUES = new JsonValues(false, false);
 

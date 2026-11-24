@@ -57,13 +57,14 @@ public final class SchemaCodec {
 
     static final long MAX_SAFE_INTEGER = (1L << 53) - 1;
     static final int MAX_DEPTH = 32, MAX_ITEMS = 1024, MAX_DIGITS = 200, MAX_HEX_BYTES = 16384;
-    /** Plutus data nested deeper than this is refused on the strict wire: the decoder recurses, and on the Web Image a
-     *  stack overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trap there). */
+    /** Plutus data nested deeper than this is refused on the strict wire: the protocol's bound (dev-host-1). Decoding is
+     *  iterative ({@code PlutusBytes}), but code after it still recurses per level, and on the Web Image a stack
+     *  overflow is a trap that ends the session (#154 review G3-4: 16,383 levels trapped there). */
     public static final int MAX_DATA_DEPTH = 256;
 
     /**
-     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before the
-     * recursive decoder. Malformed input passes: the decoder refuses it.
+     * Refuses CBOR whose arrays, maps and tags nest deeper than {@link #MAX_DATA_DEPTH}, by a linear scan before
+     * decoding. Malformed input passes: the decoder refuses it.
      */
     public static void checkNesting(byte[] b, String path) {
         var open = new java.util.ArrayDeque<long[]>();   // items left in each open container; -1: indefinite

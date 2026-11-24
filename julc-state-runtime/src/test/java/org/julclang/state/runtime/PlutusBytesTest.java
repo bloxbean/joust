@@ -194,16 +194,20 @@ class PlutusBytesTest {
                 }
             }
         }
+        int notTransactions = 0;
         for (String v : values) {
             byte[] b = HEX.parseHex(v);
             if (b.length > 0 && (b[0] & 0xff) == 0x84) {
                 try {
                     transactionData(b, data);
                 } catch (RuntimeException malformed) {
-                    // a page verifier's rejection vector (fixtures/host/verifier/reject-malformed-*): not a transaction
+                    // a page verifier's rejection vector (fixtures/host/verifier/reject-malformed-duplicate-body-key):
+                    // not a transaction; still compared below as a plain value
+                    notTransactions++;
                 }
             }
         }
+        assertTrue(notTransactions <= 1, notTransactions + " transaction-shaped values could not be walked");
         int accepted = 0;
         for (String v : values) accepted += agree(HEX.parseHex(v), v) ? 1 : 0;
         int datums = 0;

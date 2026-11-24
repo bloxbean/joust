@@ -27,7 +27,7 @@ class InspectionTest {
             assertEquals("State", str(decoded,"type"));
             assertEquals(state, decoded.required("value"));
             error("bad","request",c.rpc("decode",p.put("datum","ff")));
-            // Datums nest at most 256 CBOR levels, as arguments (#154 review F1): refused before the recursive decoder.
+            // Datums nest at most 256 CBOR levels, as arguments (#154 review F1): refused before decoding.
             error("bad","request",c.rpc("decode",p.put("datum","81".repeat(100_000) + "00")));
             assertEquals("State", str(success(c.rpc("decode",p.put("datum",utxo.getInlineDatum()))),"type"));
         }
