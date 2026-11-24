@@ -452,7 +452,7 @@ jobs:
             test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \
             test/write-regular.test.js)
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
-            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
+            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js test/mpf.test.js)
 
       # ADR-0024 M1: the offline playground of an npm project. Its server over this commit's npm dev host and a
       # memoryLedger (sessions, the server's token/Host/Origin surface, stale builds, isolation, no network), its forms,

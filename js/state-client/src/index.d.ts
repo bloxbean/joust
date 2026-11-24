@@ -253,8 +253,8 @@ export interface SnapshotUtxo {
  * Protocol 1's D13 check of a dev host's `prepare` or `publish` result before signing (ADR-0024 I2): the conformance
  * kit's ReferenceChecker in JavaScript. The input has the verifier vectors' shape; only `result` is the host's, every
  * other field is the client's own (its request, its pinned anchors, the trusted chain's UTxOs and parameters). Never
- * throws; empty problems: the body may be reviewed and signed. A call touching a MerkleMap field is refused
- * (notVerifiable): map claims are not checked here.
+ * throws; empty problems: the body may be reviewed and signed. A MerkleMap call's claims and MPF proofs are checked as
+ * the reference checks them (anchors.mapVerifier needed).
  */
 export declare function verifyHostResult(input: {
   method: 'prepare' | 'publish';
