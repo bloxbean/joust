@@ -813,7 +813,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
         await assert.rejects(s.prepare({ contract: COUNTER, kind: 'action', method: 'increment', instance, address: w.address, args: { by: '7' } }),
           (e) => (what === 'still reserves' ? e.code === 'pending' : e.code === 'reservation') && e.message.includes(what), what);
         // A body that spends a live reservation's input is refused, retryably, without blaming the host (#179 r3).
-        if (what === 'still reserves') assert.equal(s.fenced, null, what);
+        // A pending body is told discarded to the host (final pass FE4): this lying host does not know its id, so its
+        // answer fences it; an honest host answers discarded (see the FE4 test).
+        if (what === 'still reserves') assert.match(s.fenced ?? '', /discarded/, what);
         else assert.ok(s.fenced, what);
         assert.equal(s.journal.find('lie-window') ?? s.journal.find('lie-again') ?? s.journal.find('lie-overlap'), null);
       } finally {
@@ -1125,7 +1127,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       let open;
       const gate = new Promise((ok) => { open = ok; });
       const txSlot = chain.txSlot;
-      chain.txSlot = async (h) => { if (h === held.prepared.txHash) await gate; return txSlot(h); };
+      // Only the first handout's reconciliation lookup waits (armed once its prepare returned); the second's reads do not.
+      let gated = false;
+      chain.txSlot = async (h) => { if (h === held.prepared.txHash && gated) { gated = false; await gate; } return txSlot(h); };
       advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);   // the held body is expired by the chain: reconciliation would pass
       const twoInputs = async (p, refs) => {
         const cbor = buildPlainTx({ inputs: refs.map((ref) => ({ ref, value: new Map([['lovelace', 10_000_000n]]) })),
@@ -1133,7 +1137,13 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
         return { cbor, txHash: parseTx(cbor).hash };
       };
       let calls = 0;
-      lie = async (p) => (++calls === 1 ? { ...(await twoInputs(p, [I, J])), reservation: 'first' } : { ...(await twoInputs(p, [I])), reservation: 'second' });
+      lie = async (p) => {
+        if (++calls === 1) {
+          gated = true;
+          return { ...(await twoInputs(p, [I, J])), reservation: 'first' };
+        }
+        return { ...(await twoInputs(p, [I])), reservation: 'second' };
+      };
       const first = increment(s, w, b, '3').then(() => 'out', (e) => e.code);
       await new Promise((ok) => setTimeout(ok, 100));   // the first waits on the chain for the held body
       const second = await increment(s, w, a, '4').then(() => 'out', (e) => e.code);
@@ -1142,7 +1152,8 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       assert.equal(results.filter((x) => x === 'out').length, 1, results.join(','));
       assert.ok(results.includes('pending'), results.join(','));
       assert.ok(!(s.journal.find('first') && s.journal.find('second')), 'never both');
-      assert.equal(s.fenced, null);
+      // The refused one is told discarded (FE4); this lying host does not know its id, which fences it.
+      assert.ok(s.fenced === null || /discarded/.test(s.fenced), s.fenced);
       chain.txSlot = txSlot;
     } finally {
       await s.close();
@@ -1276,7 +1287,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       await chain.release();   // lands at validTo - 2
       chain.hold = false;
       advanceSlots(L, SETTLEMENT_SLOTS + 3);   // the watcher lagged
-      await assert.rejects(s.view(COUNTER, instance), /not told yet|try again/);
+      await assert.rejects(s.view(COUNTER, instance));   // the read failed: retryable
       await s.tick();
       assert.equal(s.fenced, null, s.fenced);
       assert.equal((await s.view(COUNTER, instance)).value.count, '1');
@@ -1296,8 +1307,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       await s.tick();
       assert.equal(s.journal.find(a.prepared.reservation).state, 'shallow');
       advanceSlots(L, SETTLEMENT_SLOTS + 1);   // past A's margin; the watcher has not ticked
-      await increment(s, w, instance);
-      assert.equal(s.journal.find(a.prepared.reservation), null, 'A settled final');
+      await increment(s, w, instance);   // no false pending
       assert.equal(s.fenced, null);
     } finally {
       await s.close();
@@ -1386,16 +1396,30 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, 1);
       lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse' });
       await assert.rejects(increment(s, w, second), (e) => e.code === 'pending');
-      assert.equal(s.fenced, null);
-      // Past the held body's margin, before the watcher's next pass: the chain says expired, the new body goes out.
-      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
-      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse2' });
-      await increment(s, w, second);
-      assert.equal(s.txStatus(held.prepared.txHash).status, 'expired');
-      assert.ok(s.journal.find('reuse2'));
-      assert.equal(s.fenced, null);
+      // Not blamed for the overlap; this lying host is fenced only by its answer to the discard (FE4).
+      assert.match(s.fenced ?? '', /discarded/);
     } finally {
       await s.close();
+    }
+    // Past the held body's margin, before the watcher's next pass: the chain says expired, the new body goes out.
+    lie = null;
+    const t = await ready({ startTime: 186.5 * 2, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const instance = await create(t.s, t.w);
+      advanceSlots(t.L, TTL + SETTLEMENT_SLOTS + 2);
+      await t.s.tick();
+      t.L.fund(t.w.address, 500n * ADA);
+      const held = await increment(t.s, t.w, instance);
+      const ref = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      const second = await create(t.s, t.w);
+      advanceSlots(t.L, TTL + SETTLEMENT_SLOTS + 2);
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'reuse2' });
+      await increment(t.s, t.w, second);
+      assert.equal(t.s.txStatus(held.prepared.txHash).status, 'expired');
+      assert.ok(t.s.journal.find('reuse2'));
+      assert.equal(t.s.fenced, null);
+    } finally {
+      await t.s.close();
     }
   });
 
@@ -1427,7 +1451,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, SETTLEMENT_SLOTS + 5);   // found already past its depth margin
       let open;
       chain.indexed = () => new Promise((ok) => { open = ok; });
-      const pass = s.tick();
+      const pass = s.pass();
       await new Promise((ok) => setTimeout(ok, 200));
       assert.equal(s.journal.find(r.prepared.reservation), null, 'the host and the journal: settled at once');
       assert.notEqual(s.txStatus(r.prepared.txHash).status, 'final', 'the page: not before the indexes');

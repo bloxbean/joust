@@ -327,7 +327,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       if (e.state !== 'prepared' || t <= e.validTo + settlementSlots) continue;
       if (within(await chain.txSlot(e.txHash), e, t)) {
         setTimeout(() => tick().catch(() => {}), 0).unref?.();
-        throw new Error(`the transaction ${e.txHash.slice(0, 16)}… landed and its settlement is not told yet: try again in a moment`);
+        throw Object.assign(new Error(`the transaction ${e.txHash.slice(0, 16)}… landed and its settlement is not told yet: try again in a `
+          + 'moment'), { tip: a.tip });
       }
     }
     return a;
@@ -566,6 +567,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     host.close().catch(() => {});
   }
   let ticking = false;
+  let lastIndexing = new Map();   // the last pass's indexing waits (tests wait for them)
   async function tick() {
     if (ticking || closed || ended || !host.alive) return;
     ticking = true;
@@ -604,6 +606,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       // 1. Inclusions first, each told at its own slot (no other body crosses a threshold before its own inclusion
       //    is known: #179 P1-5), oldest first.
       const indexing = new Map();   // txHash -> the bounded wait for Yaci Store's indexes, then the page's 'included'
+      lastIndexing = indexing;
       const landed = journal.entries.filter((e) => e.state === 'prepared' && within(o.seen.get(e.txHash), e, t))
         .sort((a, b) => o.seen.get(a.txHash) - o.seen.get(b.txHash));
       for (const e of landed) {
@@ -1061,8 +1064,13 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       throw new StageError('session', 'devkit', 'time on DevKit is the network\'s own: it cannot be advanced');
     },
     history: () => [...submitted],
-    /** One settlement pass now (tests). */
-    tick,
+    /** One settlement pass now, then its indexing waits (tests). */
+    async tick() {
+      await tick();
+      await Promise.all(lastIndexing.values());
+    },
+    /** One settlement pass now, as the watcher runs it (its indexing waits not awaited). */
+    pass: tick,
     async close() {
       if (closed) return;
       closed = true;
