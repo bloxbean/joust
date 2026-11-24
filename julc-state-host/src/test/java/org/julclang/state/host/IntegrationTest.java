@@ -2,6 +2,8 @@ package org.julclang.state.host;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.bloxbean.cardano.client.plutus.util.PlutusUtil;
+import org.julclang.state.runtime.snapshot.Snapshot;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
@@ -60,8 +62,47 @@ class IntegrationTest {
             var tx = success(c.rpc("prepare",r.params().deepCopy().put("ttlSlots",7),r::answer)).get("prepared");
             assertEquals(now+7,tx.get("validTo").asLong());
             assertTrue(tx.get("validFrom").isNull());
+            success(c.rpc("settled", obj().put("reservation", tx.required("reservation").asText())
+                    .put("txHash", tx.required("txHash").asText()).put("status", "discarded").put("tip", now)));
+            var second = success(c.rpc("prepare", r.params().deepCopy().put("ttlSlots", 12), r::answer)).get("prepared");
+            assertEquals(now + 12, second.required("validTo").longValue());
         }
     }
+    @Test void timedEscrowUsesSessionGenesisAndSentNow() throws Exception {
+        var file = ReplayTest.m3("escrow", "open");
+        var vector = JSON.readTree(file.toFile());
+        var snapshot = Snapshot.fromJson(vector.required("snapshot").toString());
+        long tip = snapshot.tip.getSlot(), now = tip + 2;
+        var point = obj().put("slot", tip).put("height", snapshot.tip.getHeight()).put("hash", snapshot.tip.getHash());
+        var call = (ObjectNode) vector.required("call").deepCopy();
+        // Synthetic address-set answer: the M3 vector pins a single holder by out-ref.
+        var holder = snapshot.outputs.get(call.required("referenceScripts").get(0).textValue());
+        snapshot.utxos.put(holder.getAddress(), List.of(holder));
+        String hash = holder.getReferenceScriptHash();
+        var script = PlutusUtil.getPlutusScript(hash, snapshot.scripts.get(hash).cbor()).orElseThrow();
+        snapshot.scripts.put(hash, new Snapshot.Script("PlutusScriptV3", script.getCborHex()));
+        call.remove(List.of("walletUtxos", "referenceScripts"));
+        var params = obj().put("now", now).put("ttlSlots", 4);
+        params.set("call", call);
+        var reads = new ReplayTest.Recording(vector, snapshot, point, params);
+        long deadline = Long.parseLong(call.at("/args/deadline").asText());
+        long genesis = deadline - (now + 5) * 1000;
+        Path entry = Path.of(org.julclang.state.examples.escrow.EscrowClient.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        try (var c = new Client(new Handshake(List.of(entry)))) {
+            var init = init(entry);
+            var clock = init.withObject("/clock").put("zeroTimeMs", genesis).put("zeroSlot", 0).put("slotLengthMs", 1000);
+            success(c.rpc("initialize", init));
+            var tx = success(c.rpc("prepare", params, reads::answer)).required("prepared");
+            assertEquals(now, tx.required("validFrom").longValue());
+            assertEquals(now + 4, tx.required("validTo").longValue());
+            success(c.rpc("settled", obj().put("reservation", tx.required("reservation").asText())
+                    .put("txHash", tx.required("txHash").asText()).put("status", "discarded").put("tip", tip)));
+            // Hold the transaction request and read answers fixed. The new genesis puts its end past the deadline.
+            success(c.rpc("reset", obj().put("now", now).set("clock", clock.put("zeroTimeMs", genesis + 2000))));
+            error("refusal", "require", c.rpc("prepare", params, reads::answer));
+        }
+    }
+
     @Test void expiredOnArrivalNeverReserves() throws Exception {
         var r = record();
         try (var c = session()) {
@@ -74,6 +115,21 @@ class IntegrationTest {
             assertEquals(r.fixture().get("txHash"),success(c.rpc("prepare",r.params(),r::answer)).at("/prepared/txHash"));
         }
     }
+    @Test void hostedMapUsesOnlyTheExplicitMemoryStoreAndProtocolHistory() throws Exception {
+        String previous = System.getProperty("joust.mapStore");
+        // Opening the default RocksDB at a regular file would fail even if its native code were present.
+        var path = java.nio.file.Files.createTempFile("not-a-map-store", ".tmp");
+        try {
+            System.setProperty("joust.mapStore", path.toString());
+            var v = MapRecording.record("token", MapRecording.m3("token", "mint-2"));
+            assertTrue(v.required("reads").findValuesAsText("kind").containsAll(List.of("assetHistory","redeemers","datum")));
+            HostVectorsTest.replay(v); // Reads.backend rejects getAssetService and every TransactionService method.
+        } finally {
+            if (previous == null) System.clearProperty("joust.mapStore"); else System.setProperty("joust.mapStore",previous);
+            java.nio.file.Files.delete(path);
+        }
+    }
+
     @Test void missingReferenceAndProviderFailureStopBeforePublication() throws Exception {
         var r = record();
         try (var c = session()) {

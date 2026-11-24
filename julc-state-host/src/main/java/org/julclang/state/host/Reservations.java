@@ -1,6 +1,9 @@
 package org.julclang.state.host;
 
+import com.bloxbean.cardano.client.api.util.ReferenceScriptUtil;
 import com.bloxbean.cardano.client.transaction.spec.*;
+import com.bloxbean.cardano.client.transaction.spec.cert.RegCert;
+import com.bloxbean.cardano.client.transaction.spec.cert.StakeRegistration;
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.state.runtime.ClaimStore;
@@ -11,7 +14,35 @@ import static org.julclang.state.host.Wire.*;
 /** D8. Final entries are retained with their original body evidence for a subsequent rewind. */
 final class Reservations implements ClaimStore {
     enum State { prepared, shallow, confirmed, expired, discarded }
-    record Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to) {
+    /**
+     * {@code keyedTokens}: the keyed object units the body holds or mints (M3a). {@code publishes}: the prerequisite
+     * components the body would put on chain (D14 ids {@code referenceScript:h} for an output carrying script h as its
+     * reference script, {@code stakeRegistration:h} for a registration of credential h). Both derived from the body, so
+     * a restored body counts as well as one this host built.
+     */
+    record Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to, Set<String> keyedTokens,
+                Set<String> publishes) {
+        Body(String hash, Set<String> inputs, Set<String> collateral, long from, long to) {
+            this(hash, inputs, collateral, from, to, Set.of(), Set.of());
+        }
+        // Include relinked predecessors and heads. Their previous outrefs may already have changed at shallow inclusion.
+        private static Set<String> keyedTokens(TransactionBody body) {
+            var units = new HashSet<String>();
+            for (var out : body.getOutputs()) {
+                if (out.getInlineDatum() == null || out.getValue().getMultiAssets().isEmpty()) continue;
+                var payment = new com.bloxbean.cardano.client.address.Address(out.getAddress()).getPaymentCredential();
+                if (payment.isPresent() && payment.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Script)
+                    addKeyed(units,out.getValue(),HexFormat.of().formatHex(payment.get().getBytes()));
+            }
+            if (body.getMint()!=null) addKeyed(units,new Value(java.math.BigInteger.ZERO,body.getMint()),null);
+            return Set.copyOf(units);
+        }
+        private static void addKeyed(Set<String> units, Value value, String policy) {
+            for (var amount : com.bloxbean.cardano.client.api.util.ValueUtil.toAmountList(value)) {
+                String unit = amount.getUnit();
+                if (unit.length()==114 && unit.startsWith("4b",56) && (policy == null || unit.startsWith(policy))) units.add(unit);
+            }
+        }
         static Body of(Transaction tx, String hash, int network) {
             var b = tx.getBody();
             if (b.getTtl() <= 0) throw HostError.bad("unbounded", "transaction has no upper bound");
@@ -21,7 +52,28 @@ final class Reservations implements ClaimStore {
             if (b.getWithdrawals() != null) {
                 for (var withdrawal : b.getWithdrawals()) Reads.checkAddress(withdrawal.getRewardAddress(), network);
             }
-            return new Body(hash, refs(b.getInputs()), refs(b.getCollateral()), b.getValidityStartInterval(), b.getTtl());
+            return new Body(hash, refs(b.getInputs()), refs(b.getCollateral()), b.getValidityStartInterval(), b.getTtl(),
+                    keyedTokens(b), publishes(b));
+        }
+        private static Set<String> publishes(TransactionBody b) {
+            var ids = new HashSet<String>();
+            for (var output : b.getOutputs()) {
+                if (output.getScriptRef() == null) continue;
+                try {
+                    ids.add("referenceScript:" + HexFormat.of().formatHex(
+                            ReferenceScriptUtil.deserializeScriptRef(output.getScriptRef()).getScriptHash()));
+                } catch (Exception e) {
+                    throw bad("invalid reference script in transaction output");
+                }
+            }
+            if (b.getCerts() != null) {
+                for (var cert : b.getCerts()) {
+                    var credential = cert instanceof StakeRegistration r ? r.getStakeCredential()
+                            : cert instanceof RegCert r ? r.getStakeCredential() : null;
+                    if (credential != null) ids.add("stakeRegistration:" + HexFormat.of().formatHex(credential.getHash()));
+                }
+            }
+            return Set.copyOf(ids);
         }
         private static Set<String> refs(List<TransactionInput> ins) {
             var refs = new HashSet<String>();
@@ -41,6 +93,33 @@ final class Reservations implements ClaimStore {
         boolean live() { return state == State.prepared || state == State.shallow; }
     }
     private Map<String, Entry> entries = new LinkedHashMap<>();
+    private final Map<String, String> publicationCredentials = new HashMap<>();
+    private final Map<String, Set<String>> assertions = new HashMap<>();
+
+    void commit(Entry entry, String credential) {
+        commit(entry);
+        if (credential != null) publicationCredentials.put(entry.id, credential);
+    }
+
+    boolean registered(String credential) {
+        if (assertions.values().stream().anyMatch(keys -> keys.contains(credential))) return true;
+        return publicationCredentials.entrySet().stream().anyMatch(p ->
+                p.getValue().equals(credential) && entries.get(p.getKey()).state == State.confirmed);
+    }
+
+    Transport.Reply registered(JsonNode p) {
+        fields(p, "credential", "evidence");
+        String credential = str(p, "credential");
+        if (!credential.matches("[0-9a-f]{56}")) throw bad("invalid stake credential hash");
+        var evidence = fields(p.path("evidence"), "txHash", "slot", "message");
+        String hash = str(evidence, "txHash");
+        if (!hash.matches("[0-9a-f]{64}") || evidence.has("slot") == evidence.has("message"))
+            throw bad("expected transaction hash and either inclusion slot or node message");
+        if (evidence.has("slot")) number(evidence, "slot", 0);
+        else str(evidence, "message");
+        return new Transport.Reply(obj(), () -> assertions.computeIfAbsent(hash, ignored -> new HashSet<>()).add(credential));
+    }
+
     private final long margin;
     private final int network;
     private boolean reconcile;
@@ -57,10 +136,38 @@ final class Reservations implements ClaimStore {
         if (reconcile) throw HostError.refusal("reconcile", "restore is incomplete");
     }
     Entry prepare(Body body, long tip) {
+        return prepare(body, tip, null);
+    }
+    /** {@code designated}: a keyed call's designated input, which the body must spend (ADR-0022 D11), else null. */
+    Entry prepare(Body body, long tip, String designated) {
+        if (designated != null && !body.inputs.contains(designated)) throw KeyedOperation.mismatch();
+        if (body.inputs.stream().anyMatch(this::avoids) || body.collateral.stream().anyMatch(this::avoids))
+            throw HostError.refusal("pending", "transaction touches a reserved input");
+        if (designated != null && body.keyedTokens.stream().anyMatch(this::reservesToken))
+            throw HostError.refusal("pending", "a keyed object is still reserved");
         if (body.to <= tip) throw HostError.refusal("expiredOnArrival", "transaction is already past its upper bound");
         return new Entry(Long.toString(++lastId), body, State.prepared, null);
     }
     void commit(Entry e) { entries.put(e.id, e); }
+
+    /**
+     * A live (prepared or shallow) transaction already publishes prerequisite {@code id} or a component of it
+     * ({@code verifier:h} is {@code referenceScript:h} with {@code stakeRegistration:h}): a second publication would
+     * lock another holder's minimum value, or register twice, before the first settles (#151 review DB1).
+     */
+    boolean publishing(String id) {
+        var parts = id.startsWith("verifier:")
+                ? Set.of("referenceScript:" + id.substring(9), "stakeRegistration:" + id.substring(9)) : Set.of(id);
+        for (var e : entries.values()) {
+            if (e.live() && e.body.publishes.stream().anyMatch(parts::contains)) return true;
+        }
+        return false;
+    }
+
+    @Override public boolean reservesToken(String unit) {
+        for (var e : entries.values()) if (e.live() && e.body.keyedTokens.contains(unit)) return true;
+        return false;
+    }
 
     @Override public boolean avoids(String ref) {
         for (var e : entries.values()) {
@@ -78,6 +185,17 @@ final class Reservations implements ClaimStore {
     @Override public boolean isDesignated(String ref) { return false; }
     @Override public boolean designate(String ref) { throw new Unsupported("designate"); }
     @Override public void undesignate(String ref, Expiry when) { throw new Unsupported("undesignate"); }
+
+    /**
+     * ADR-0022 D11's retry rules, after the call's identity matched its record (rule 1); the body's spending of the
+     * designation (rule 2) is {@link #prepare}'s. {@code unspent}: the designation is in the payer's complete listing.
+     */
+    void checkOperation(KeyedOperation op, boolean unspent, long tip, String objectUnit) {
+        if (!unspent) throw HostError.refusal("mayHaveLanded", "designated input spent");
+        if (avoids(op.identity().designated()) || objectUnit != null && reservesToken(objectUnit)
+                || op.attempts().values().stream().anyMatch(to -> tip - to <= margin))
+            throw HostError.refusal("pending", "a previous attempt or an input is still reserved");
+    }
 
     void observe(long tip) {
         if (!reconcile) entries.replaceAll((id, e) -> advance(e, tip));
@@ -111,7 +229,11 @@ final class Reservations implements ClaimStore {
             }
             case "rolledBack" -> {
                 if (e.state == State.confirmed) {
-                    whileLive.accept(() -> deepRollback = true);
+                    whileLive.accept(() -> {
+                        deepRollback = true;
+                        publicationCredentials.remove(e.id);
+                        assertions.remove(e.body.hash);
+                    });
                     throw HostError.refusal("deepRollback", "a final inclusion was rolled back");
                 }
                 if (!e.live()) throw conflict();
@@ -131,12 +253,15 @@ final class Reservations implements ClaimStore {
         };
         Entry finalState = reconcile ? next : advance(next, tip);
         return new Transport.Reply(obj().put("state", finalState.state.name()), () -> {
+            if (status.equals("rolledBack")) assertions.remove(e.body.hash);
             commit(finalState);
             observe(tip);
         });
     }
 
     void rewind(long tip) {
+        assertions.clear();
+        // Keep publication provenance: rewind downgrades final entries below, and re-confirmation can teach again.
         entries.replaceAll((id, e) -> switch (e.state) {
             case confirmed, shallow -> e.slot > tip ? e.as(State.prepared, null) : e.as(State.shallow, e.slot);
             default -> e;

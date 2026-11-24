@@ -1,0 +1,47 @@
+{
+  "method" : "prepare",
+  "params" : {
+    "now" : 1886,
+    "ttlSlots" : 20,
+    "call" : {
+      "contract" : "org.julclang.state.examples.pool.Pool",
+      "kind" : "action",
+      "method" : "donate",
+      "address" : "addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
+      "args" : { },
+      "instance" : "1111111111111111111111111111111111111111111111111111111111111111",
+      "pay" : {
+        "lovelace" : "3000000"
+      }
+    }
+  },
+  "network" : {
+    "networkId" : 0,
+    "protocolMagic" : 42,
+    "mainnet" : false
+  },
+  "clock" : {
+    "zeroSlot" : 0,
+    "zeroTimeMs" : 1795339145000,
+    "slotLengthMs" : 1000
+  },
+  "time" : {
+    "settlementSlots" : 2,
+    "maxTtlSlots" : 900,
+    "maxNowAheadSlots" : 900
+  },
+  "limits" : {
+    "readsPerCall" : 256,
+    "readBytesPerCall" : 33554432,
+    "callDeadlineMs" : 60000
+  },
+  "initialSession" : {
+    "registered" : [ ]
+  },
+  "reads" : [ ],
+  "feature" : "unverifiable",
+  "expected" : {
+    "kind" : "unsupported",
+    "code" : "unverifiable"
+  }
+}

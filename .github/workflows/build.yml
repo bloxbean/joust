@@ -86,6 +86,9 @@ jobs:
           if dupes or missing or extra:
               print(f"::error::devnet-shards.txt: in several shards {dupes}; in no shard {missing}; no DevKit tests {extra}")
               raise SystemExit(1)
+          if any(':julc-state-host:test' in line and len(line) > 1 for line in lines):
+              print("::error::devnet-shards.txt: :julc-state-host:test needs a shard of its own (a fresh chain)")
+              raise SystemExit(1)
           shards = [{'index': i + 1, 'tasks': ' '.join(line)} for i, line in enumerate(lines)]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('shards=' + json.dumps(shards) + '\n')
@@ -211,8 +214,12 @@ jobs:
 
       # Everything `./gradlew build -PnoDevnet` runs (the fuzz targets' replays included), but the short fuzz runs, which
       # the next step makes with libFuzzer's statistics logged.
+      # ADR-0022 I10: the dev host's tests run under strace in a network namespace (.github/scripts/trace-dev-host.sh).
+      - name: Install strace (dev-host trace)
+        run: command -v strace || { sudo apt-get update -q && sudo apt-get install -y -q strace; }
+
       - name: Build and test (no DevKit)
-        run: ./gradlew build -PnoDevnet -PnoFuzz --continue --stacktrace
+        run: ./gradlew build -PnoDevnet -PnoFuzz -PjoustHostTrace --continue --stacktrace
 
       # gradle/jazzer-fuzz.gradle's fuzzShort (part of `build` without -PnoFuzz), each public target for 30 s: the IR readers
       # and NODE_OPTIONS. -Pfuzz.public leaves out the decoders of on-chain data (ValueAdapter, AddressAdapter, the memos),
@@ -439,6 +446,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/setup-js.sh
+          ./gradlew :julc-state-host:nodeHostConformance
           # #130 r1 (design D3): migrate was removed with .jsc v1 (#111); M5d's fmt and write-regular run here.
           (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
             test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \
@@ -953,7 +961,11 @@ jobs:
       - name: DevKit tests
         env:
           TASKS: ${{ matrix.shard.tasks }}
-        run: ./gradlew $TASKS -PdevnetOnly --continue --stacktrace
+        # The dev host's end-to-end test needs a fresh chain: its shard holds nothing else (plan checks that).
+        run: |
+          extra=()
+          if [ "$TASKS" = ":julc-state-host:test" ]; then extra+=(-PjoustHostE2e); fi
+          ./gradlew $TASKS -PdevnetOnly "${extra[@]}" --continue --stacktrace
 
       # Per-module test time (to rebalance .github/ci/devnet-shards.txt) and every skipped test: DevKit tests skip
       # themselves when a prerequisite is missing, which would otherwise pass silently.

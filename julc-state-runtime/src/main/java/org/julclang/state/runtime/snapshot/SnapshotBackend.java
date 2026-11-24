@@ -255,6 +255,7 @@ public final class SnapshotBackend implements BackendService {
     final class Scripts implements ScriptService {
         @Override
         public Result<PlutusScript> getPlutusScript(String scriptHash) {
+            if (s.absentScripts.contains(scriptHash)) return Result.error("absent").code(404);
             Snapshot.Script sc = s.scripts.get(scriptHash);
             if (sc == null) throw new Need("script", scriptHash);
             if (sc.cborHex() == null) {
@@ -277,6 +278,7 @@ public final class SnapshotBackend implements BackendService {
 
         @Override
         public Result<String> getPlutusScriptCbor(String scriptHash) {
+            if (s.absentScripts.contains(scriptHash)) return Result.error("absent").code(404);
             Snapshot.Script sc = s.scripts.get(scriptHash);
             if (sc == null) throw new Need("script", scriptHash);
             return ok(sc.cbor() != null ? sc.cbor() : sc.cborHex());

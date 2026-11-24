@@ -43,6 +43,7 @@ class ReservationsTest {
         held(false);
         assertEquals("expired",settle("expired",34,null));
         code("conflict",() -> settle("discarded",34,null));
+        code("conflict",() -> settle("confirmed",34,19L));
     }
     @Test void confirmedRewindAndDeepRollback() {
         table.commit(entry);
@@ -207,5 +208,22 @@ class ReservationsTest {
         // Late settlement of the old reservation is still told apart.
         var late = obj().put("reservation", first.id()).put("txHash", b.hash()).put("status", "discarded").put("tip", to - 1);
         code("conflict", () -> t.settled(late, Runnable::run));
+    }
+
+    /** #151 Codex review: a body may not read an input a live reservation intends to spend; reading alone holds nothing. */
+    @Test void aReferenceToAReservedInputIsPending() {
+        String spent = "ab".repeat(32) + "#1";
+        var t = new Reservations(3, false, 0);
+        var e = t.prepare(new Reservations.Body("h", Set.of(spent), Set.of(), 0, 30), 9);
+        var reading = com.bloxbean.cardano.client.transaction.spec.TransactionBody.builder()
+                .referenceInputs(new ArrayList<>(List.of(new com.bloxbean.cardano.client.transaction.spec.TransactionInput("AB".repeat(32), 1))))
+                .build();
+        Session.requireUnreservedReferences(reading, t);   // prepared, not yet handed out: nothing is held
+        t.commit(e);
+        code("pending", () -> Session.requireUnreservedReferences(reading, t));
+        var other = com.bloxbean.cardano.client.transaction.spec.TransactionBody.builder()
+                .referenceInputs(new ArrayList<>(List.of(new com.bloxbean.cardano.client.transaction.spec.TransactionInput("ab".repeat(32), 2))))
+                .build();
+        Session.requireUnreservedReferences(other, t);
     }
 }

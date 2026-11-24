@@ -185,10 +185,7 @@ final class Transport {
     private static ObjectNode envelope(JsonNode id) { return obj().put("jsonrpc", "2.0").set("id", id); }
     private void error(JsonNode id, HostError failure) {
         var out = envelope(id);
-        var err = out.putObject("error").put("code", failure.rpcCode()).put("message", failure.getMessage());
-        var data = err.putObject("data").put("kind", failure.kind.wire).put("code", failure.code)
-                .put("message", failure.getMessage()).put("retryAtSlot", failure.retryAtSlot);
-        data.set("sites", JSON.valueToTree(failure.sites));
+        out.set("error", failure.rpcError());
         try { send(encode(out)); }
         catch (HostError large) {
             if (!large.code.equals("tooLarge") || failure.code.equals("tooLarge")) stop("response id exceeds frame budget");

@@ -1,0 +1,61 @@
+plugins {
+    id 'org.julclang.joust'
+    id 'maven-publish'
+}
+joust { blockfrost = false }
+group = 'fixture'
+version = '1'
+sourceSets.main.java.destinationDirectory.set(layout.buildDirectory.dir('custom/classes'))
+sourceSets.main.output.resourcesDir = layout.buildDirectory.dir('custom/resources').get().asFile
+
+// A second source-set output with a producer independent of compileJava and processResources.
+def maps = tasks.register('messageMaps', Copy) {
+    from('maps')
+    into(layout.buildDirectory.dir('custom/maps'))
+}
+sourceSets.main.output.dir([builtBy: maps], layout.buildDirectory.dir('custom/maps'))
+
+dependencies {
+    implementation project(':sibling')
+    runtimeOnly files('local.jar')
+    runtimeOnly 'fixture:forced:1'
+    runtimeOnly 'fixture:replaced:1'
+    if (project.hasProperty('http')) implementation "org.julclang:julc-state-server:${joustVersion}"
+    if (project.hasProperty('badRuntime')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}"
+    if (project.hasProperty('missingFile')) runtimeOnly files('missing.jar')
+    if (project.hasProperty('partialAdapter')) runtimeOnly 'fixture:partial:1'
+    if (project.hasProperty('sourcesAdapter')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:sources"
+    if (project.hasProperty('partialSame')) runtimeOnly "org.julclang:julc-state-serve:${joustVersion}:partial"
+    if (project.hasProperty('adapterCopy')) runtimeOnly files('adapter-copy.jar')
+    if (project.hasProperty('multiRelease')) runtimeOnly files('mr.jar')
+}
+// #150 Codex review: an older adapter through another configuration, ahead of the application's own graph.
+if (project.hasProperty('secondAdapter')) {
+    def older = configurations.create('olderAdapter') {
+        canBeConsumed = false
+        attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage, Usage.JAVA_RUNTIME)) }
+    }
+    dependencies { olderAdapter "org.julclang:julc-state-serve:${findProperty('secondAdapter') == 'current' ? joustVersion : 'old'}" }
+    sourceSets.main.runtimeClasspath = older + sourceSets.main.runtimeClasspath
+}
+// #150 Codex review: a launch directory that would contain the spec itself.
+if (project.hasProperty('specInOutput')) sourceSets.main.output.dir(layout.buildDirectory.dir('joust'))
+configurations.runtimeClasspath {
+    resolutionStrategy.force 'fixture:forced:2'
+    resolutionStrategy.dependencySubstitution {
+        substitute module('fixture:replaced') using module('fixture:replacement:1')
+    }
+    if (project.hasProperty('incompatible')) resolutionStrategy.force 'org.julclang:julc-state-serve:old'
+    if (project.hasProperty('badRuntime')) resolutionStrategy.force 'org.julclang:julc-state-runtime:old'
+    if (project.hasProperty('missingJackson')) exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+    if (project.hasProperty('noVm')) exclude group: 'org.julclang', module: 'julc-vm'
+}
+
+publishing.publications.create('app', MavenPublication) { from components.java }
+
+tasks.register('applicationClasspath') {
+    def runtime = sourceSets.main.runtimeClasspath
+    def expected = layout.buildDirectory.file('expected-classpath')
+    dependsOn runtime
+    doLast { expected.get().asFile.text = runtime.files.findAll { it.exists() }.collect { it.absolutePath }.join('\n') }
+}

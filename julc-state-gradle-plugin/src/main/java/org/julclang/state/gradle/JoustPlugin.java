@@ -96,6 +96,8 @@ public class JoustPlugin implements Plugin<Project> {
         });
         project.getTasks().withType(JavaExec.class).configureEach(t -> t.jvmArgs("--enable-native-access=ALL-UNNAMED"));
 
+        HostClasspath.register(project, java, jv);
+
         if (project.file(MAIN_JSC).isDirectory()) {
             jsc(project, versions);
         }

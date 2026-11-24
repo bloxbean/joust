@@ -104,13 +104,43 @@ class TransportTest {
             error("bad", "busy", c.rpc("second", obj()));
             release.countDown();
             JsonNode pending;
-            do { c.request("second", obj()); pending = c.next(); } while (pending.has("error"));
+            do {
+                c.send(obj().put("id", id).put("method", "second").set("params", obj()));
+                pending = c.next();
+                if (pending.has("error")) error("bad", "busy", pending);
+            } while (pending.has("error"));
             assertEquals("2.1", pending.required("id").textValue());
             c.send(obj().put("id", rid).set("result", obj()));
             c.send(obj().put("id", "2.1").set("result", obj()));
             assertTrue(success(c.next()).isObject());
         } finally { release.countDown(); }
     }
+    @Test void cancelledCpuResultCannotCommitOrReplyAgain() throws Exception {
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var commits = new AtomicInteger();
+        try (var c = new Client((call, p) -> {
+            if (call.method.equals("prepare")) {
+                started.countDown();
+                while (release.getCount() > 0) Thread.onSpinWait();
+                return new Transport.Reply(obj(), commits::incrementAndGet);
+            }
+            return new Transport.Reply(obj());
+        })) {
+            int id = c.request("prepare", obj());
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            c.send(obj().put("method", "$/cancelRequest").set("params", obj().put("id", id)));
+            error("internal", "cancelled", c.next());
+            error("bad", "busy", c.rpc("prepare", obj()));
+            release.countDown();
+            JsonNode reply;
+            do { reply = c.rpc("describe", obj()); } while (reply.has("error"));
+            assertTrue(success(reply).isObject());
+            assertEquals(0, commits.get());
+            assertTrue(c.output.isEmpty());
+        } finally { release.countDown(); }
+    }
+
     @Test void uncooperativeExecutionStopsHost() throws Exception {
         var started = new CountDownLatch(1);
         var release = new CountDownLatch(1);

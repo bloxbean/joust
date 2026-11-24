@@ -360,16 +360,95 @@ class DevHostSeamsTest {
 
     @Test
     void assetCollectionUsesTheFirstEligibleTokenInput() {
+        checkAssetCollection(new Account(Networks.testnet()), new HostStore(), true);
+    }
+
+    @Test
+    void walletWithASessionStoreCollectsTheTokenBehindAdaAndReservedInputs() {
+        var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        checkAssetCollection(wallet, new HostStore(), true);
+        checkAssetCollection(wallet, JvmClaimStore.INSTANCE, false);
+    }
+
+    @Test
+    void hostedAssetCollectionReadsTheWholeWalletListing() {
+        // #151 Codex review: a hosted payment read only pages 1-19 of 100, so a sole token input at 1,901 was "not held".
         var chain = new Chain();
-        var store = new HostStore();
+        chain.paged = true;
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var rt = runtime(chain, b -> b.claimStore(new HostStore()));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        for (int i = 0; i < 1_900; i++) chain.wallet.add(utxo(payer.baseAddress(), 2_000_000));
+        var last = utxo(payer.baseAddress(), 9_000_000, new Amount("00".repeat(28) + "01", BigInteger.ONE));
+        chain.wallet.add(last);
+        var collected = new ArrayList<Utxo>();
+        var tx = new Tx() {
+            @Override
+            public Tx collectFrom(List<Utxo> inputs) {
+                collected.addAll(inputs);
+                return this;
+            }
+        };
+        rt.inScope(CallScope.hosted(10), () -> {
+            AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+            return null;
+        });
+        assertEquals(List.of(last), collected);
+    }
+
+    /** #151 Codex review: a composition counts the wallet's asset inputs as spent, so the payout funding pick skips them. */
+    @Test
+    void assetPicksCountAsSpentInAComposition() {
+        var chain = new Chain();
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var rt = runtime(chain, b -> b.claimStore(new HostStore()));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var tokens = utxo(payer.baseAddress(), 90_000_000, new Amount("00".repeat(28) + "01", BigInteger.ONE));
+        chain.wallet.addAll(List.of(utxo(payer.baseAddress(), 5_000_000), tokens));
+        var cap = new TxRunner.Capture();
+        TxRunner.CAPTURE.set(cap);
+        try {
+            AssetTx.collectAssets(cap.tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertTrue(cap.inputs.contains(Designation.ref(tokens)), "the largest UTxO, picked for its token, is spent");
+    }
+
+    /** #151 Codex re-review: asset selection skips a published reference script and an input the composition spends. */
+    @Test
+    void assetSelectionSkipsReferenceScriptsAndSpentInputs() {
+        var chain = new Chain();
+        var payer = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
+        var rt = runtime(chain, b -> b.claimStore(new HostStore()));
+        var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
+        var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
+        var script = utxo(payer.baseAddress(), 30_000_000, token);
+        script.setReferenceScriptHash("ef".repeat(28));
+        var spent = utxo(payer.baseAddress(), 9_000_000, token);
+        var free = utxo(payer.baseAddress(), 9_000_000, token);
+        chain.wallet.addAll(List.of(script, spent, free));
+        var cap = new TxRunner.Capture();
+        cap.inputs.add(Designation.ref(spent));
+        TxRunner.CAPTURE.set(cap);
+        try {
+            AssetTx.collectAssets(cap.tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        assertTrue(cap.inputs.contains(Designation.ref(free)), "the ordinary, unspent token input");
+        assertFalse(cap.inputs.contains(Designation.ref(script)), "never the reference script");
+    }
+
+    private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
+        var chain = new Chain();
         var rt = runtime(chain, b -> b.claimStore(store));
         var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
-        var payer = new Account(Networks.testnet());
         var token = new Amount("00".repeat(28) + "01", BigInteger.ONE);
         var reserved = utxo(payer.baseAddress(), 9_000_000, token);
         var free = utxo(payer.baseAddress(), 9_000_000, token);
-        chain.wallet.addAll(List.of(reserved, free));
-        store.avoid.add(Designation.ref(reserved));
+        chain.wallet.addAll(List.of(utxo(payer.baseAddress(), 20_000_000), reserved, free));
+        if (store instanceof HostStore host) host.avoid.add(Designation.ref(reserved));
         var collected = new ArrayList<Utxo>();
         var tx = new Tx() {
             @Override
@@ -379,7 +458,7 @@ class DevHostSeamsTest {
             }
         };
         AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
-        assertEquals(List.of(free), collected);
+        assertEquals(collects ? List.of(free) : List.of(), collected);
     }
 
     @Test

@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.core.cbor.PlutusDataCborEncoder;
 import org.julclang.core.types.JulcList;
 import org.julclang.core.types.JulcMap;
@@ -42,14 +41,13 @@ public final class JsonValues {
      * strictly: a JSON number must be a safe integer (|n| at most 2^53 - 1, as the JavaScript codec's
      * {@code Number.isSafeInteger}; larger values are decimal strings), and a {@code String} argument's bytes must be
      * well-formed UTF-8, so the contract never receives other bytes than the client sent (#145 Codex review 3, 4).
-     * Plutus data nested deeper than the decoder's stack raises the {@link StackOverflowError} itself, which the host
-     * reports as {@code internal}/{@code tooDeep} (ADR-0022 D9).
+     * Plutus data nests at most 256 CBOR levels ({@code SchemaCodec.checkNesting}).
      */
     public static final JsonValues TYPED = new JsonValues(true, true);
     /**
      * The HTTP service's codec, as it has always behaved: record reflection failures are bad values, a JSON number up
-     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data too
-     * deep to decode is a bad value.
+     * to 2^53 in magnitude is accepted, malformed UTF-8 is decoded with replacement characters, and Plutus data of any
+     * depth decodes (iteratively; a later overflow is answered 400 by the server).
      */
     public static final JsonValues BAD_VALUES = new JsonValues(false, false);
 
@@ -97,11 +95,14 @@ public final class JsonValues {
         if (raw == byte[].class) return hex(json, path);
         if (raw == String.class) return string(hex(json, path), path);
         if (PlutusData.class.isAssignableFrom(raw)) {
+            byte[] cbor = hex(json, path);
+            if (strict) {
+                try { org.julclang.state.runtime.described.SchemaCodec.checkNesting(cbor, path); }
+                catch (org.julclang.state.runtime.described.SchemaCodec.DataError e) { throw new BadValue(e.getMessage()); }
+            }
             try {
-                return PlutusDataCborDecoder.decode(hex(json, path));
-            } catch (RuntimeException | StackOverflowError e) {   // the decoder recurses: deep nesting overflows
-                // The dev host reports an overflow as internal/tooDeep (ADR-0022 D9): let its per-call handler see it.
-                if (propagateAborts && e instanceof StackOverflowError overflow) throw overflow;
+                return org.julclang.state.runtime.PlutusBytes.decode(cbor);   // iterative: any depth decodes
+            } catch (RuntimeException e) {
                 throw new BadValue(path + ": not Plutus data CBOR");
             }
         }
@@ -117,12 +118,21 @@ public final class JsonValues {
             if (!json.isArray()) throw new BadValue(path + ": a map is an array of [key, value] pairs");
             if (json.size() > MAX_ITEMS) throw new BadValue(path + ": too many entries");
             JulcMap<Object, Object> m = JulcMap.empty();
+            byte[] after = null;
             // insert prepends: insert from the last pair, so the map keeps the order given.
             for (int i = json.size() - 1; i >= 0; i--) {
                 JsonNode e = json.get(i);
                 if (!e.isArray() || e.size() != 2) throw new BadValue(path + "[" + i + "]: not a [key, value] pair");
-                m = m.insert(fromJson(e.get(0), typeArg(type, 0, path), path + "[" + i + "][0]", depth + 1),
-                        fromJson(e.get(1), typeArg(type, 1, path), path + "[" + i + "][1]", depth + 1));
+                Object key = fromJson(e.get(0), typeArg(type, 0, path), path + "[" + i + "][0]", depth + 1);
+                if (strict) {
+                    // The strict wire takes a map in canonical key order (RFC 8949 length-first, as the npm host's
+                    // codec and CCL's inline datums), without duplicates (#154 review G3-3).
+                    byte[] cbor = PlutusDataCborEncoder.encode(org.julclang.clientlib.PlutusDataAdapter.fromClientLib(
+                            org.julclang.clientlib.PlutusDataAdapter.convert(key)));
+                    if (after != null && canonical(cbor, after) >= 0) throw new BadValue(path + ": map keys not in canonical order, or repeated");
+                    after = cbor;
+                }
+                m = m.insert(key, fromJson(e.get(1), typeArg(type, 1, path), path + "[" + i + "][1]", depth + 1));
             }
             return m;
         }
@@ -136,10 +146,26 @@ public final class JsonValues {
         }
         if (raw.isRecord()) {
             RecordComponent[] cs = raw.getRecordComponents();
-            if (cs.length == 1 && !json.isObject()) return construct(raw, fromJson(json, cs[0].getGenericType(), path, depth + 1));
+            // The strict wire reads a record as the description writes it: a newtype (a ledger hash or @NewType) as its
+            // component, every other record as an object (#154 review G3-3).
+            if (cs.length == 1 && (strict ? newType(raw) : !json.isObject())) return construct(raw, fromJson(json, cs[0].getGenericType(), path, depth + 1));
             return record(json, raw, path, depth, false);
         }
         throw new BadValue(path + ": arguments of type " + raw.getSimpleName() + " are not supported");
+    }
+
+    private static final java.util.Set<String> LEDGER_HASHES = java.util.Set.of("PubKeyHash", "ScriptHash", "ValidatorHash",
+            "PolicyId", "TokenName", "DatumHash", "TxId");   // as DescriptionWriter.LEDGER_HASHES
+
+    private static boolean newType(Class<?> raw) {
+        return raw == org.julclang.ledger.Value.class   // the description writes a Value as its map
+                || raw.getName().startsWith("org.julclang.ledger.") && LEDGER_HASHES.contains(raw.getSimpleName())
+                || java.util.Arrays.stream(raw.getAnnotations()).anyMatch(a -> a.annotationType().getName().equals("org.julclang.stdlib.annotation.NewType"));
+    }
+
+    /** RFC 8949 canonical order of two encoded keys: the shorter first, then bytewise. */
+    private static int canonical(byte[] a, byte[] b) {
+        return a.length != b.length ? Integer.compare(a.length, b.length) : java.util.Arrays.compareUnsigned(a, b);
     }
 
     private Object record(JsonNode json, Class<?> raw, String path, int depth, boolean variant) {

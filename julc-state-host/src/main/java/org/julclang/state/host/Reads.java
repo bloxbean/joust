@@ -6,10 +6,12 @@ import com.bloxbean.cardano.client.backend.api.*;
 import com.bloxbean.cardano.client.backend.model.Block;
 import com.bloxbean.cardano.client.api.util.CostModelUtil;
 import com.bloxbean.cardano.client.plutus.spec.Language;
+import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.julclang.state.runtime.snapshot.*;
 import java.lang.reflect.*;
+import java.math.BigInteger;
 import java.util.*;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
@@ -19,7 +21,17 @@ import static org.julclang.state.host.Wire.*;
  * asset filtering and canonical UTxOs after acquisition of the complete address set. */
 final class Reads {
     interface Peer { Call.Answer read(ObjectNode request); }
-    static final List<String> KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> BASE_KINDS = List.of("utxos", "output", "tip", "protocolParams", "script", "stakeRegistration");
+    static final List<String> MAP_KINDS = List.of("assetHistory", "redeemers", "datum");
+    private final Map<JsonNode, JsonNode> mapAnswers = new HashMap<>();
+    JsonNode mapAnswer(String kind, ObjectNode request) {
+        request.put("kind", kind);
+        return mapAnswers.computeIfAbsent(request, key -> answer(kind, request));
+    }
+    /** Whether this call already holds the answer (it then costs no read). */
+    boolean hasMapAnswer(String kind, ObjectNode request) {
+        return mapAnswers.containsKey(request.put("kind", kind));
+    }
     private final Peer peer;
     private final long now, ahead, maxCount, maxBytes;
     private final int network;
@@ -31,9 +43,23 @@ final class Reads {
     long greatestTip = -1;
     private final Snapshot snapshot = new Snapshot();
     private final SnapshotBackend local = new SnapshotBackend(snapshot);
-    private final Set<String> absentScripts = new HashSet<>();
     private final Map<String, Optional<Boolean>> registration = new HashMap<>();
     private final Set<String> queriedOutputs = new HashSet<>();
+
+    /**
+     * Contract policies whose reserved-name tokens are unique, each with whether it is keyed: instances, objects and
+     * intents in every contract (ADR-0007 D3), keyed objects (0x4B) only in keyed ones (ADR-0016 I44).
+     */
+    private Map<String, Boolean> uniquePolicies = Map.of();
+
+    /**
+     * Refuse, before its tip counts, a listing that holds a unique token of one of {@code policies} twice or in a quantity
+     * other than one: such an answer contradicts itself (#151 Codex review).
+     */
+    Reads uniqueTokens(Map<String, Boolean> policies) {
+        uniquePolicies = Map.copyOf(policies);
+        return this;
+    }
 
     Reads(Peer peer, long now, long ahead, long maxCount, long maxBytes, int network, LongConsumer observe) {
         this.peer = peer;
@@ -107,8 +133,7 @@ final class Reads {
             }
             case "script.getPlutusScript", "script.getPlutusScriptCbor" -> {
                 String hash = (String) args[0];
-                if (!snapshot.scripts.containsKey(hash) && !absentScripts.contains(hash)) script(hash);
-                if (absentScripts.contains(hash)) return Result.error("absent").code(404);
+                if (!snapshot.scripts.containsKey(hash) && !snapshot.absentScripts.contains(hash)) script(hash);
                 target = local.getScriptService();
             }
             case "block.getLatestBlock" -> {
@@ -142,6 +167,17 @@ final class Reads {
         catch (InvocationTargetException e) { throw e.getCause(); }
     }
 
+    List<Utxo> outputs(String address) {
+        utxos(address);
+        return snapshot.utxos.get(address);
+    }
+
+    void checkBalance(TransactionBody body) {
+        BodyBalance.check(body, snapshot);
+    }
+
+    String tipHash() { return lastHash; }
+
     private void utxos(String address) {
         if (snapshot.utxos.containsKey(address)) return;
         checkAddress(address, network);
@@ -168,9 +204,25 @@ final class Reads {
             if (a.has("more") && (cursor == null || cursor.isEmpty() || !cursors.add(cursor)))
                 throw inconsistent("invalid chunk cursor");
         } while (cursor != null);
+        var unique = new HashSet<String>();
+        for (var u : values) for (var a : u.getAmount()) {
+            String unit = a.getUnit();
+            if (unit.length() < 56) continue;
+            Boolean keyed = uniquePolicies.get(unit.substring(0, 56));
+            if (keyed == null || !reservedName(unit.substring(56), keyed)) continue;
+            if (!BigInteger.ONE.equals(a.getQuantity()) || !unique.add(unit)) throw inconsistent("the listing holds a unique token twice");
+        }
         snapshot.utxos.put(address, values);
         accepted();   // every chunk at one chain point
     }
+
+    /** ADR-0007 D3: an instance (32 bytes), owned object (29, 0x4F) or intent (29, 0x49) name; a keyed object's (29, 0x4B) only in a keyed contract (ADR-0016 I44). */
+    static boolean reservedName(String hex, boolean keyed) {
+        return hex.length() == 64 || hex.length() == 58 && (hex.startsWith("4f") || hex.startsWith("49") || keyed && hex.startsWith("4b"));
+    }
+
+    private static final java.util.regex.Pattern CANONICAL_UNIT =
+            java.util.regex.Pattern.compile("lovelace|[0-9a-f]{56}(?:[0-9a-f]{2}){0,32}");
 
     private Utxo checkOutput(JsonNode n, String address, String wanted) {
         var index = n.path("output_index");
@@ -185,7 +237,10 @@ final class Reads {
             var quantity = asset.path("quantity");
             boolean integral = quantity.isIntegralNumber() && quantity.bigIntegerValue().signum() >= 0;
             boolean decimal = quantity.isTextual() && quantity.textValue().matches("[0-9]+");
-            if (!unit.isTextual() || unit.textValue().isEmpty() || !units.add(unit.textValue()) || !(integral || decimal))
+            // One spelling per asset (#151 review SB4): lovelace, or a lowercase policy id with a token name of at
+            // most 32 bytes, so no two strings name one asset and every lookup by unit agrees with the balance check.
+            if (!unit.isTextual() || !CANONICAL_UNIT.matcher(unit.textValue()).matches() || !units.add(unit.textValue())
+                    || !(integral || decimal))
                 throw inconsistent("invalid or duplicate output amount");
         }
         Utxo u;
@@ -235,7 +290,7 @@ final class Reads {
 
     private void script(String hash) {
         var v = value("script", "hash", hash);
-        if (v == null) { absentScripts.add(hash); accepted(); return; }
+        if (v == null) { snapshot.absentScripts.add(hash); accepted(); return; }
         String type = v.path("type").asText("");
         if (!Set.of("PlutusScriptV1", "PlutusScriptV2", "PlutusScriptV3").contains(type)) throw inconsistent("unknown script language");
         snapshot.scripts.put(hash, new Snapshot.Script(type, v.path("cborHex").asText("")));
@@ -268,7 +323,7 @@ final class Reads {
         if (field != null) params.put(field, key);
         return answer(kind, params).get("value");
     }
-    private JsonNode answer(String kind, ObjectNode params) {
+    JsonNode answer(String kind, ObjectNode params) {
         if (++count > maxCount) throw HostError.bad("readLimit", "read count exceeds the session limit");
         var response = peer.read(params.put("kind", kind));
         bytes += response.bytes();
@@ -297,7 +352,7 @@ final class Reads {
         if (variants != 1 || a.path("value").isNull()
                 || a.has("absent") && !a.get("absent").booleanValue()
                 || a.has("unsupported") && !a.get("unsupported").booleanValue()
-                || a.has("more") && (!kind.equals("utxos") || !a.has("value"))) throw inconsistent("invalid read outcome");
+                || a.has("more") && (!(kind.equals("utxos") || kind.equals("assetHistory")) || !a.has("value"))) throw inconsistent("invalid read outcome");
         lastHash = hash;
         lastHeight = height.longValue();
         greatestTip = slot.longValue();
@@ -313,7 +368,11 @@ final class Reads {
     }
     // D8: a tip reaches the reservation table only from a read the host accepted, after its kind's own checks
     // (one chain point across chunks, output and script evidence). A refused answer releases nothing (#149 Codex).
+    // Map history answers (assetHistory, redeemers, datum) never call this: they do not advance reservations.
     private void accepted() { observe.accept(greatestTip); }
+    /** Reads this call may still make within readsPerCall, and the limit itself. */
+    long remainingReads() { return maxCount - count; }
+    long readLimit() { return maxCount; }
     // A JSON string of 64 lowercase hex digits: a 64-digit number's text matches too (#149 Codex fix review).
     static boolean hex64(JsonNode n) { return n.isTextual() && n.textValue().matches("[0-9a-f]{64}"); }
     // The wire schema's nullable output fields: absent, null, or a string of the field's format.

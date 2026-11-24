@@ -8,11 +8,16 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
     },
+    "./host": "./src/service.js",
     "./worker": "./src/worker.js",
     "./page": "./src/page.js",
     "./load": "./src/load.js"
   },
   "imports": {
+    "#service-mode": {
+      "joust-host": "./src/host-service.js",
+      "default": "./src/provider-service.js"
+    },
     "#engine": {
       "browser": "./src/browser/engine.js",
       "default": "./src/engine.js"

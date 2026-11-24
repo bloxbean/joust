@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "joust": "bin/joust.js",
+    "joust-host": "bin/joust-host.js",
     "joust-lsp": "bin/joust-lsp.js"
   },
   "exports": {
