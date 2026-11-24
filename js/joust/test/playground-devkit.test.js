@@ -6,7 +6,7 @@
 //   journal (Q6, ADR-0022 D8): validated whole, locked atomically, keyed by chain, pruned safely, restored after a restart
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync,
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync,
   writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createServer, request } from 'node:http';
@@ -268,7 +268,6 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
       (raw) => { raw.entries[0].cbor = raw.entries[0].cbor.slice(0, -2) + '00'; },   // another body than the hash says
       (raw) => { raw.entries[0].validTo += 1; },                                       // bounds that are not the body's
       (raw) => { raw.entries.push({ reservation: 'x' }); },                            // one malformed among good ones
-      (raw) => { raw.version = 2; },
     ].entries()) {
       const root = `/p/valid${i}`;
       const j = await open(root, 2);
@@ -328,6 +327,38 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     const k = await open('/p/dupid', 12);
     assert.equal(k.lost, true);
     assert.deepEqual(k.entries, []);
+    k.close();
+  });
+
+  test('#179 r6: a journal of another version, or with a field this joust does not know, is refused (fail closed)', async () => {
+    for (const [i, spoil] of [
+      (raw) => { raw.version = 2; },
+      (raw) => { raw.rewoundUntil = 200; },                 // round 3's field: its fence would be dropped
+      (raw) => { raw.entries[0].somethingNew = true; },
+    ].entries()) {
+      const root = `/p/unknown${i}`;
+      const j = await open(root, 13);
+      j.raise(300);
+      j.record(body(1));
+      j.close();
+      const raw = JSON.parse(readFileSync(j.file, 'utf8'));
+      spoil(raw);
+      writeFileSync(j.file, JSON.stringify(raw));
+      await assert.rejects(open(root, 13), (e) => e.code === 'journalUnknown' && e.message.includes(j.file), `case ${i}`);
+      assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.lock')), 'not left locked');
+    }
+  });
+
+  test('#179 r6: a fence a closing session could not write, left as a marker, is applied by the next open', async () => {
+    const j = await open('/p/marker', 14);
+    j.raise(300);
+    j.record(body(1));
+    j.remove('1');   // an intact journal on disk
+    j.close();
+    writeFileSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json'), JSON.stringify({ fencedUntil: 250 }));
+    const k = await open('/p/marker', 14);
+    assert.equal(k.fencedUntil, 250);
+    assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json')), 'the marker is gone once written');
     k.close();
   });
 
@@ -1112,6 +1143,119 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       assert.ok(results.includes('pending'), results.join(','));
       assert.ok(!(s.journal.find('first') && s.journal.find('second')), 'never both');
       assert.equal(s.fenced, null);
+      chain.txSlot = txSlot;
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r6: a start whose tip checks are all inconclusive is refused, never admitted unchecked', async () => {
+    const { L, chain, w, at } = await settled(190);
+    let n = 0;
+    chain.tipOverride = () => ({ slot: at - 25 + (n++), hash: sha('moving ' + n), height: 1 });   // moving, below removedAt
+    try {
+      await assert.rejects(session(L, chain, { startTime: 190 }), (e) => e.code === 'chainMoving');
+    } finally {
+      chain.tipOverride = null;
+    }
+    const s = await session(L, chain, { startTime: 190 });
+    try {
+      await init(s, w);   // a stable start: builds
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('#179 r6: a rewind the restore sees, or a host\'s reverse read sees, fences builds (the handout included)', async () => {
+    // Restore: an intact journal with a body in it, observed below the removal point; the later start check is above it.
+    const { L, chain, w, at, high } = await settled(191);
+    let s = await session(L, chain, { startTime: 191 });
+    try {
+      chain.hold = true;
+      await init(s, w);   // handed out, kept in the journal
+    } finally {
+      await s.close();
+      chain.pending.length = 0;
+      chain.hold = false;
+    }
+    let reads = 0;
+    chain.tipOverride = () => {
+      const slot = reads++ < 2 ? at - 1 : at + 1;   // the restore's own observation reads first
+      return { slot, hash: sha('r6 ' + slot), height: 1 };
+    };
+    s = await session(L, chain, { startTime: 191 });
+    try {
+      assert.ok(s.status().fencedUntil >= high);
+      assert.equal(s.status().fencedUntil, s.journal.highWater);
+      await assert.rejects(init(s, w), (e) => e.code === 'rewound');
+    } finally {
+      await s.close();
+      chain.tipOverride = null;
+    }
+    // A reverse read during a prepare: the body it prepares is not handed out.
+    const other = await settled(192);
+    s = await session(other.L, other.chain, { startTime: 192 });
+    try {
+      tipAt(other.chain, other.at - 2);
+      await assert.rejects(init(s, other.w), (e) => e.code === 'rewound');
+      assert.deepEqual(s.journal.entries, [], 'nothing handed out');
+      assert.equal(s.journal.fencedUntil, other.high);
+    } finally {
+      await s.close();
+      other.chain.tipOverride = null;
+    }
+  });
+
+  test('#179 r6: a close whose fence cannot be written keeps the journal locked: no replacement opens it as clean', async () => {
+    const { L, chain, w, at, high } = await settled(193);
+    const s = await session(L, chain, { startTime: 193 });
+    const dir = join(state, 'chains', '0-42-193');
+    chmodSync(dir, 0o500);
+    try {
+      tipAt(chain, at - 10);
+      await s.tick();
+      assert.equal(s.journal.fencedUntil, null);
+      await s.close();   // still not writable
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // Reopened between the removal point and the high-water mark: in this process the journal is still locked …
+    tipAt(chain, Math.floor((at + high) / 2));
+    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalLocked');
+    // … and after a restart (the owner gone) it is a stale lock to remove by hand, never opened unfenced.
+    const lock = readdirSync(dir).find((f) => f.endsWith('.lock'));
+    writeFileSync(join(dir, lock), '999999999 gone');
+    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalStaleLock');
+    chain.tipOverride = null;
+    assert.ok(w.address);
+  });
+
+  test('#179 r6: an expiry found during a handout removes the entry only if it is still the body observed', async () => {
+    let lie = null;
+    const { L, chain, s, w } = await ready({ startTime: 194, launch: lyingLaunch({ prepare: async (r, p) => (lie ? { ...r, prepared: { ...r.prepared, ...(await lie(p)) } } : r) }) });
+    try {
+      const a = await create(s, w);
+      const b = await create(s, w);
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);
+      await s.tick();
+      L.fund(w.address, 500n * ADA);
+      const held = await increment(s, w, a);
+      const ref = parseTx(held.prepared.cbor).inputs.map((x) => (typeof x === 'string' ? x : `${x.txHash}#${x.index}`))[0];
+      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 2);   // the chain shows it expired
+      let open;
+      const gate = new Promise((ok) => { open = ok; });
+      const txSlot = chain.txSlot;
+      chain.txSlot = async (h) => { if (h === held.prepared.txHash) await gate; return txSlot(h); };
+      lie = async (p) => ({ ...(await plainBody({ ref, to: p.now + 10 })), reservation: 'after' });
+      const handout = increment(s, w, b).then(() => 'out', (e) => e.code);
+      await new Promise((ok) => setTimeout(ok, 100));
+      // Meanwhile the old entry settled and another body was journaled under its id.
+      const replacement = body(77, { ttl: L.slot + 20 });
+      s.journal.remove(held.prepared.reservation, L.slot);
+      s.journal.record({ ...replacement, reservation: held.prepared.reservation });
+      open();
+      assert.equal(await handout, 'out');
+      assert.equal(s.journal.find(held.prepared.reservation)?.txHash, replacement.txHash, 'the replacement is kept');
       chain.txSlot = txSlot;
     } finally {
       await s.close();
