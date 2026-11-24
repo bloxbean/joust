@@ -227,16 +227,23 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       if (!hosts.includes(req.headers.host ?? '')) return refuse(res, 421, 'foreign Host');
       const origin = req.headers.origin;
       if (origin !== undefined && !hosts.map((h) => 'http://' + h).includes(origin)) return refuse(res, 403, 'foreign Origin');
-      if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) {
+      const url = new URL(req.url, 'http://' + req.headers.host);
+      // Mounted (D3): the path under the base (the handler sees only its base and what is under it).
+      const path = '/' + url.pathname.slice(base.length);
+      // Cross-site requests are refused, except a top-level navigation to the page itself: the command opens it from a
+      // file:// launcher (a cross-site initiator), the page holds no secret until its fragment brings the token, and
+      // frame-ancestors 'none' keeps it out of frames. /api/ stays same-origin only (and needs the token besides).
+      const site = req.headers['sec-fetch-site'];
+      const navigation = req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
+        && (req.method === 'GET' || req.method === 'HEAD') && !path.startsWith('/api/');
+      if (site && !['same-origin', 'none'].includes(site) && !navigation) {
         return refuse(res, 403, 'cross-site request');
       }
-      const url = new URL(req.url, 'http://' + req.headers.host);
-      // Mounted (D3): the base without its slash moves to the base, so the page's relative URLs resolve under it.
+      // The base without its slash moves to the base, so the page's relative URLs resolve under it.
       if (base !== '/' && url.pathname === base.slice(0, -1)) {
         res.writeHead(308, { ...SECURITY, location: base });
         return res.end();
       }
-      const path = '/' + url.pathname.slice(base.length);
       if (path.startsWith('/api/')) {
         if (req.method !== 'POST') return refuse(res, 405, 'POST only');
         if (!sameToken(req.headers[TOKEN_HEADER])) return refuse(res, 401, 'missing or wrong session token');

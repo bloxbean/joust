@@ -205,7 +205,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   const url = `http://127.0.0.1:${server.address().port}`;
   log(`joust dev on ${url}: the page at /, the chain at /chain, the build at /joust${net.admin ? ', faucet at /dev/topup' : ''}`);
   // The playground's token is in no log line (ADR-0024 D8): a private launcher file forwards the browser to it.
-  const launcher = playground ? (await import('./playground/index.js')).launcherFile(`${url}/playground/#token=${playground.token}`) : null;
+  const launcher = playground ? (await import('./playground/index.js')).writeLauncher(`${url}/playground/#token=${playground.token}`) : null;
   if (launcher) log(`  the playground: open ${launcher.link} (a private file that forwards to ${url}/playground/ with this run's token)`);
 
   const close = async () => {

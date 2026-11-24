@@ -74,7 +74,8 @@ function h(tag, props = {}, ...kids) {
 const show = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2);
 const ada = (lovelace) => {
   const l = BigInt(lovelace);
-  return `${l / ADA}.${(l % ADA).toString().padStart(6, '0')} ADA`;
+  const a = l < 0n ? -l : l;
+  return `${l < 0n ? '-' : ''}${a / ADA}.${(a % ADA).toString().padStart(6, '0')} ADA`;
 };
 
 // ---- state
@@ -340,7 +341,7 @@ async function selectContract(name) {
   const { policy: hash, address } = anchors;
   const x = r.description['x-joust'] ?? {};
   const deployment = await sapi('deployment', { contract: name });
-  const needsVerifier = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends) || !!x.maps?.length;
+  const needsVerifier = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends) || !!r.description.definitions?.['org.julclang.state.api.MerkleMap'];
   if (deployment.scriptHashes?.spend !== hash || deployment.addresses?.contract !== address) {
     throw new StageFailure({ stage: 'verification', code: 'deployment',
       message: 'the dev host\'s deployment differs from the build this session pinned: start a new session' });
@@ -687,8 +688,12 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
         try {
           res = await sapi('submit', { reservation: r.prepared.reservation, cbor: signed.cbor });
         } catch (e) {
-          // The server settled the reservation (a ledger refusal is discarded there).
-          report.submitted = true;
+          // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
+          // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a
+          // host that ended, a malformed transaction) must not leave the instance pending.
+          // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
+          // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
+          if (devkit() && e.code === 'nodeRefused') report.submitted = true;
           throw labelled(e, 'ledger', label);
         }
         report.submitted = true;
@@ -714,12 +719,17 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
     });
     // Everything here is read from the body and the trusted chain by the checks (report), not from the host.
     const { plan, walletNet, signers } = report;
-    const net = Object.entries(walletNet ?? {}).map(([unit, q]) => (unit === 'lovelace' ? ada(q) : `${q} ${unit}`)).join(', ') || 'nothing';
+    // Positive amounts leave the signer's wallet; negative ones come back to it (a destroy returns its locked ADA).
+    const amount = (unit, q) => (unit === 'lovelace' ? ada(q < 0n ? -q : q) : `${q < 0n ? -q : q} ${unit}`);
+    const entries = Object.entries(walletNet ?? {}).map(([unit, q]) => [unit, BigInt(q)]).filter(([, q]) => q !== 0n);
+    const pays = entries.filter(([, q]) => q > 0n).map(([u, q]) => amount(u, q)).join(', ');
+    const gets = entries.filter(([, q]) => q < 0n).map(([u, q]) => amount(u, q)).join(', ');
+    const net = [pays && `pays ${pays}`, gets && `receives ${gets}`].filter(Boolean).join('; ') || 'nothing';
     const lines = [
       ['signer', `${signer.label} (${signer.keyHash})`],
       ['transaction', r.prepared.txHash],
       ['fee', ada(plan.fee)],
-      [`${signer.label} pays in all`, net],
+      [`${signer.label}, in all`, net],
       ['validity', `${plan.validFrom ?? '-'} … ${plan.validTo ?? '-'} (exclusive), now ${r.now}`],
       ['signers', signers.join(', ') || 'none'],
       ['scripts run', String(plan.redeemers.length)],
