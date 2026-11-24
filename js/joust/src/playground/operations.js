@@ -28,7 +28,8 @@ export function operationRecord(r) {
 /**
  * One step on the records (a list): { action: 'create', record } (kept as it is when one exists: the existing one is
  * returned), 'addAttempt' { id, attempt }, 'removeAttempt' { id, txHash } (only that attempt), 'ambiguous' { id },
- * 'landed' { id, txHash } (kept with its landed attempt until removed), 'remove' { id }, 'release' { id } (removes it
+ * 'landed' { id, txHash } (kept with its landed attempt until removed), 'remove' { id }, 'removeIfFinal' { id,
+ * designated, txHash } (only the record with that designation and attempt), 'release' { id } (removes it
  * only while it has no attempt). Returns { rows, record } (the record after the step, or null), or throws on a
  * malformed step.
  */
@@ -73,6 +74,14 @@ export function applyOperation(rows, step) {
     }
     case 'remove':
       return { rows: at < 0 ? rows : rows.filter((_, i) => i !== at), record: null };
+    case 'removeIfFinal': {
+      // A final poll's cleanup: only the record it watched (the same designation, holding the finalized attempt). A
+      // record the user closed and started again under the same id is another one, and stays.
+      if (at < 0) return { rows, record: null };
+      const r = rows[at];
+      if (r.designated !== step.designated || !r.attempts.some((a) => a.txHash === step.txHash)) return { rows, record: r };
+      return { rows: rows.filter((_, i) => i !== at), record: null };
+    }
     case 'release':
       // Nothing of the operation left the page (a refused first prepare, a declined review): its designated input is
       // free again. A record with an attempt is kept (that attempt may land).

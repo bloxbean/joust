@@ -1060,7 +1060,7 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   report.submitted = true;
   // 7. settle: on DevKit as the chain settles it (I7); offline at once
   if (devkit()) return settlement(res, label, op ? async () => {
-    await ops.step({ action: 'remove', id: op.id });
+    await ops.step({ action: 'removeIfFinal', id: op.id, designated: op.designated, txHash: r.prepared.txHash });
     await drawPendingOps();
   } : null);
   record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
