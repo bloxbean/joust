@@ -16,7 +16,7 @@ import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
-import { anchorsOf, checkCall as hostCheck, checkPublication } from './check.js';
+import { anchorsOf, checkCall as hostCheck, checkPublication, foreignPayerInput } from './check.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
@@ -845,13 +845,9 @@ async function walletStillMatches(signer, cbor, label, { publication = false } =
   if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
   // The change address is the payer, and only it (final pass): an input at another address of the wallet's key, or, in
   // a publication (all of its inputs are the wallet's), any input elsewhere, is refused before the wallet sees it.
-  for (const ref of refs) {
-    const at = outputs.get(ref).address;
-    let key = null;
-    try { key = paymentKeyHash(at); } catch { /* a script address */ }
-    if (at !== signer.address && (key === signer.keyHash || publication)) {
-      throw refuse(`the body spends ${ref} at ${at.slice(0, 24)}…, not the wallet's connected address: prepare the call again`);
-    }
+  const foreign = foreignPayerInput(refs, (ref) => outputs.get(ref).address, { payer: signer.address, keyHash: signer.keyHash, publication });
+  if (foreign) {
+    throw refuse(`the body spends ${foreign.ref} at ${foreign.at.slice(0, 24)}…, not the wallet's connected address: prepare the call again`);
   }
   const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
   const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));

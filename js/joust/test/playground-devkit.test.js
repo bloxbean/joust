@@ -214,6 +214,36 @@ describe('ADR-0024 M3 I4: DevKit only', () => {
     }
   });
 
+  test('FD5: a reverse read with a malformed parameter never reaches the provider', async () => {
+    const asked = [];
+    const chain = new Proxy({ tip: async () => ({ slot: 1, hash: sha('fd5'), height: 1 }) }, {
+      get: (t, k) => t[k] ?? (async (...a) => { asked.push([k, ...a]); return []; }) });
+    const read = chainReads(chain);
+    for (const q of [{ kind: 'utxos', address: '../../admin' }, { kind: 'output', ref: 'x#0' }, { kind: 'script', hash: 'zz' },
+      { kind: 'assetHistory', unit: 'ab' }, { kind: 'redeemers', txHash: '00' }, { kind: 'datum', hash: '..' },
+      { kind: 'stakeRegistration', credential: 'q' }, { kind: 'utxos' }]) {
+      await assert.rejects(read(q), /invalid/, JSON.stringify(q));
+    }
+    assert.deepEqual(asked, []);
+    await read({ kind: 'utxos', address: 'addr_test1' + 'q'.repeat(50) });
+    assert.equal(asked.length, 1);
+  });
+
+  test('final pass (Codex): a CIP-30 body spends only from the connected change address', async () => {
+    const { foreignPayerInput } = await import('../playground/check.js');
+    const { baseAddress } = await import('@julclang/state-client');
+    const key = 'ab'.repeat(28);
+    const base = baseAddress({ type: 'key', hash: key }, { type: 'key', hash: 'cd'.repeat(28) }, 0);
+    const ent = enterpriseAddress({ type: 'key', hash: key }, 0);
+    const script = enterpriseAddress({ type: 'script', hash: 'ef'.repeat(28) }, 0);
+    const at = { a: base, b: ent, c: script };
+    const o = { payer: base, keyHash: key };
+    assert.equal(foreignPayerInput(['a', 'c'], (r) => at[r], o), null, 'a call: the change address and a script input');
+    assert.deepEqual(foreignPayerInput(['a', 'b'], (r) => at[r], o), { ref: 'b', at: ent }, 'another address of the same key');
+    assert.deepEqual(foreignPayerInput(['c'], (r) => at[r], { ...o, publication: true }), { ref: 'c', at: script }, 'a publication: anything else');
+    assert.equal(foreignPayerInput(['a'], (r) => at[r], { ...o, publication: true }), null);
+  });
+
   test('reads answer at one chain point: a read that straddles a new block is read again', async () => {
     let slot = 10;
     let reads = 0;
@@ -360,6 +390,68 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     assert.equal(k.fencedUntil, 250);
     assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json')), 'the marker is gone once written');
     k.close();
+  });
+
+  test('final pass (Codex): an unreadable recovery file refuses the open, naming it; never a fresh journal', async () => {
+    const make = async (root) => {
+      const j = await open(root, 15);
+      j.raise(300);
+      j.record(body(1));
+      j.close();
+      return j;
+    };
+    // A high-water mark that is not one.
+    let j = await make('/p/unread1');
+    writeFileSync(j.file.replace(/\.journal\.json$/, '.high-water.json'), '{"highWater":"soon"}');
+    await assert.rejects(open('/p/unread1', 15), (e) => e.code === 'journalUnreadable' && e.message.includes('.high-water.json'));
+    assert.ok(!existsSync(j.file.replace(/\.journal\.json$/, '.lock')), 'not left locked');
+    // A journal this user cannot read.
+    j = await make('/p/unread2');
+    chmodSync(j.file, 0o000);
+    try {
+      await assert.rejects(open('/p/unread2', 15), (e) => e.code === 'journalUnreadable' && e.message.includes(j.file));
+    } finally {
+      chmodSync(j.file, 0o600);
+    }
+    // A pending fence that is not one.
+    j = await make('/p/unread3');
+    writeFileSync(j.file.replace(/\.journal\.json$/, '.fence-pending.json'), '[]');
+    await assert.rejects(open('/p/unread3', 15), (e) => e.code === 'journalUnreadable');
+    // A journal whose bytes are not JSON: lost history behind the high-water mark (not a fresh journal).
+    j = await make('/p/unread4');
+    writeFileSync(j.file, '{ not json');
+    const k = await open('/p/unread4', 15);
+    assert.equal(k.lost, true);
+    assert.equal(k.highWater, 300);
+    k.close();
+  });
+
+  test('final pass (Codex): a journal write is durable before it returns: the file, then its directory, synced', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const j = await open('/p/durable', 16);
+    const original = fs.fsyncSync;
+    const synced = [];
+    fs.fsyncSync = (fd) => { synced.push(fd); return original(fd); };
+    syncBuiltinESMExports();
+    try {
+      j.raise(400);
+      j.record(body(1));
+    } finally {
+      fs.fsyncSync = original;
+      syncBuiltinESMExports();
+      j.close();
+    }
+    assert.ok(synced.length >= 4, `two writes, each the file and its directory: ${synced.length} fsyncs`);
+  });
+
+  test('FD4: a lock held by a running playground is refused naming its file', async () => {
+    const j = await open('/p/held', 17);
+    try {
+      await assert.rejects(open('/p/held', 17), (e) => e.code === 'journalLocked' && e.message.includes('.lock'));
+    } finally {
+      j.close();
+    }
   });
 
   test('a write after another playground took the lock fails: one writer, always', async () => {
@@ -1236,7 +1328,9 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     // … and after a restart (the owner gone) it is a stale lock to remove by hand, never opened unfenced.
     const lock = readdirSync(dir).find((f) => f.endsWith('.lock'));
     writeFileSync(join(dir, lock), '999999999 gone');
-    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalStaleLock');
+    // Reaches the page whole, naming the lock and how to remove it (FD4).
+    await assert.rejects(session(L, chain, { startTime: 193 }), (e) => e.code === 'journalStaleLock' && e.stage === 'session'
+      && e.message.includes(`rm '${join(dir, lock)}'`));
     chain.tipOverride = null;
     assert.ok(w.address);
   });
@@ -1493,7 +1587,7 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       advanceSlots(L, SETTLEMENT_SLOTS + 1);
       await s.tick();
       assert.equal(s.txStatus(landed.prepared.txHash).status, 'final');
-      // A handed-out body the page never signed survives a restart too, and expires.
+      // A body the page never signed (no wallet had it, never submitted): not restored after a restart (FD3) …
       const instance = (await s.instances(COUNTER)).items.find((x) => x.instance).instance;
       waiting = await increment(s, w, instance);
     } finally {
@@ -1501,12 +1595,12 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     }
     s = await session(L, chain, { startTime: 104 });
     try {
-      assert.equal(s.status().restored, 1);
-      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'handedOut');
-      advanceSlots(L, TTL + SETTLEMENT_SLOTS + 1);
-      await s.tick();
-      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'expired');
+      assert.equal(s.status().restored, 0);
+      assert.equal(s.txStatus(waiting.prepared.txHash).status, 'discarded');
       assert.deepEqual(s.journal.entries, []);
+      // … so the instance is not blocked until its expiry.
+      const instance = (await s.instances(COUNTER)).items.find((x) => x.instance).instance;
+      await increment(s, w, instance);
     } finally {
       await s.close();
     }
@@ -1536,6 +1630,21 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
     c.close();
     writeFileSync(c.file, '{"version":1,"entries":[{"reservation":"x"}]}');
     await assert.rejects(session(L, fakeChain(L, 107), { startTime: 107 }), (e) => e.code === 'journalCorrupt');
+  });
+
+  test('FD4: SIGHUP stops joust playground as Ctrl-C does', async () => {
+    const bin = join(root, 'node_modules/@julclang/joust/bin/joust.js');
+    const p = spawn(process.execPath, [existsSync(bin) ? bin : join(repo, 'js/joust/bin/joust.js'), 'playground', '--no-open'],
+      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { out += d; });
+    const exited = new Promise((ok) => p.on('exit', (code, signal) => ok({ code, signal })));
+    for (const until = Date.now() + 240_000; !/Ctrl-C stops the playground/.test(out) && Date.now() < until;) await new Promise((ok) => setTimeout(ok, 200));
+    assert.match(out, /Ctrl-C stops the playground/);
+    p.kill('SIGHUP');
+    const r = await exited;
+    assert.deepEqual(r, { code: 0, signal: null }, out);
   });
 
   test('plutusScriptOf: a provider\'s script CBOR, single- or double-wrapped, as the protocol\'s script read', async () => {
