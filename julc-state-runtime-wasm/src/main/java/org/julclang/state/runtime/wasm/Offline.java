@@ -10,9 +10,6 @@ import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier;
 import com.bloxbean.cardano.client.common.model.Network;
 import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
-import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
-import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
-import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.transaction.spec.MultiAsset;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
@@ -95,7 +92,28 @@ public final class Offline {
      * every mutation that applies to it, evaluated against the snapshot. A mutation the scripts accept is an
      * invariant's hole; the offline tests expect none. {@code network}: 0 test networks, 1 mainnet.
      */
+    /**
+     * {@link #attacks(EvaluateRequest, int)}'s request with the caller's hint: {@code untimedWindow} true says no script
+     * reads the transaction's validity window (a keyed action or retire whose method reads no time, from the anchored
+     * description), so the range attacks are not run. Absent or false: they run whenever both bounds are there.
+     */
+    public record AttacksRequest(String tx, String snapshot, long zeroSlot, long zeroTimeMs, long slotLengthMs, Boolean untimedWindow) {}
+
+    public static AttackResult attacks(AttacksRequest r, int network) {
+        return attacks(new EvaluateRequest(r.tx(), r.snapshot(), r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs()), network,
+                Boolean.TRUE.equals(r.untimedWindow()));
+    }
+
     public static AttackResult attacks(EvaluateRequest r, int network) {
+        return attacks(r, network, false);
+    }
+
+    /** Whether the range attacks run on {@code tx}: both bounds, and the caller did not say the window is bookkeeping. */
+    static boolean rangeAttacked(Transaction tx, boolean untimedWindow) {
+        return !untimedWindow && tx.getBody().getTtl() > 0 && tx.getBody().getValidityStartInterval() > 0;
+    }
+
+    static AttackResult attacks(EvaluateRequest r, int network, boolean untimedWindow) {
         try {
             byte[] cbor = HexUtil.decodeHexString(r.tx());
             Snapshot snapshot = Snapshot.fromJson(r.snapshot());
@@ -139,17 +157,14 @@ public final class Offline {
                 out.add(attack(cbor, snapshot, r, "required signer replaced", "I5/I11",
                         t -> t.getBody().setRequiredSigners(new ArrayList<>(List.of(fill(28, 0xEE))))));
             }
-            // Range attacks apply only to the bounds a script binds (as the JVM testkit gates them on a real range): a Ctx
-            // (or a batch's Batch(validFrom, validTo)) carrying both bounds binds all of them (I6); a keyed link binds its
-            // upper bound (the relinked node's linkedAt) and its lower one (the cooldown), not a later start. A keyed
-            // attempt's bookkeeping window without either (an untimed keyed action) is read by no script.
-            Binding bound = binding(base, r);
-            if (bound != Binding.NONE) {
+            // Range attacks apply when the transaction has both bounds (a script may read them: a Ctx carries them, and a
+            // @ValidAfter/@ValidBefore method reads tx.validRange directly); a call with a TTL only has none a script reads.
+            // The one exception is the caller's: `untimedWindow` says the window is bookkeeping (a keyed action or retire
+            // whose method reads no time), from the anchored description. It errs towards more attacks, never fewer.
+            if (rangeAttacked(base, untimedWindow)) {
                 out.add(attack(cbor, snapshot, r, "upper bound removed", "I6/I11", t -> t.getBody().setTtl(0)));
                 out.add(attack(cbor, snapshot, r, "upper bound moved a slot later", "I6", t -> t.getBody().setTtl(t.getBody().getTtl() + 1)));
                 out.add(attack(cbor, snapshot, r, "lower bound removed", "I6/I11", t -> t.getBody().setValidityStartInterval(0)));
-            }
-            if (bound == Binding.CTX) {
                 out.add(attack(cbor, snapshot, r, "lower bound moved a slot earlier", "I6",
                         t -> t.getBody().setValidityStartInterval(t.getBody().getValidityStartInterval() - 1)));
             }
@@ -157,58 +172,6 @@ public final class Offline {
         } catch (Throwable t) {
             return new AttackResult(false, List.of(), String.valueOf(t.getMessage() != null ? t.getMessage() : t));
         }
-    }
-
-    /** What the transaction's scripts bind of its validity window. */
-    enum Binding { NONE, LINK, CTX }
-
-    /**
-     * CTX when a redeemer carries the window as a Ctx (5 fields, validFrom and validTo at 3 and 4) or a Batch(validFrom,
-     * validTo), equal to the body's bounds in POSIX ms; else LINK when a keyed output (a 29-byte 0x4B token at a script
-     * address) has the upper bound as its datum's linkedAt (field 2); else NONE.
-     */
-    static Binding binding(Transaction tx, EvaluateRequest r) {
-        var body = tx.getBody();
-        if (body.getTtl() <= 0) return Binding.NONE;
-        BigInteger upper = ms(body.getTtl(), r);
-        BigInteger lower = body.getValidityStartInterval() > 0 ? ms(body.getValidityStartInterval(), r) : null;
-        var redeemers = tx.getWitnessSet() == null ? null : tx.getWitnessSet().getRedeemers();
-        if (lower != null && redeemers != null) {
-            for (var rd : redeemers) if (carriesWindow(rd.getData(), lower, upper, 0)) return Binding.CTX;
-        }
-        for (TransactionOutput o : body.getOutputs()) {
-            if (!scriptAddress(o.getAddress()) || !(o.getInlineDatum() instanceof ConstrPlutusData d)) continue;
-            boolean keyed = o.getValue().getMultiAssets() != null && o.getValue().getMultiAssets().stream()
-                    .flatMap(m -> m.getAssets().stream()).anyMatch(a -> {
-                        byte[] name = a.getNameAsBytes();
-                        return name.length == 29 && (name[0] & 0xFF) == 0x4B;
-                    });
-            var fields = d.getData().getPlutusDataList();
-            if (keyed && fields.size() > 2 && fields.get(2) instanceof BigIntPlutusData at && at.getValue().equals(upper)) return Binding.LINK;
-        }
-        return Binding.NONE;
-    }
-
-    private static BigInteger ms(long slot, EvaluateRequest r) {
-        return BigInteger.valueOf(r.zeroTimeMs()).add(BigInteger.valueOf(slot - r.zeroSlot()).multiply(BigInteger.valueOf(r.slotLengthMs())));
-    }
-
-    /** A Ctx-shaped (5 fields) or Batch-shaped (2 fields) constructor with the window's bounds, anywhere in the data. */
-    private static boolean carriesWindow(PlutusData d, BigInteger lower, BigInteger upper, int depth) {
-        if (depth > 8) return false;
-        if (d instanceof ConstrPlutusData c) {
-            var f = c.getData().getPlutusDataList();
-            if (f.size() == 5 && is(f.get(3), lower) && is(f.get(4), upper)) return true;
-            if (f.size() == 2 && is(f.get(0), lower) && is(f.get(1), upper)) return true;
-            for (var x : f) if (carriesWindow(x, lower, upper, depth + 1)) return true;
-        } else if (d instanceof ListPlutusData l) {
-            for (var x : l.getPlutusDataList()) if (carriesWindow(x, lower, upper, depth + 1)) return true;
-        }
-        return false;
-    }
-
-    private static boolean is(PlutusData d, BigInteger v) {
-        return d instanceof BigIntPlutusData b && b.getValue().equals(v);
     }
 
     private static Attack attack(byte[] cbor, Snapshot snapshot, EvaluateRequest r, String name, String invariant, Consumer<Transaction> mutate) {

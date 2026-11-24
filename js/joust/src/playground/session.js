@@ -145,8 +145,20 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       throw e;
     }
   };
-  const remember = (prepared, kind) => {
-    if (prepared?.reservation) reservations.set(prepared.reservation, { txHash: prepared.txHash, validTo: prepared.validTo, kind });
+  /**
+   * Whether no script reads a call's validity window, from the pinned description: a keyed action or retire whose
+   * method takes no Ctx and has no @ValidAfter/@ValidBefore (its window is the attempt's bookkeeping; such calls never
+   * link). Every other call keeps the range attacks.
+   */
+  const untimed = (call) => {
+    if (call?.kind !== 'keyedAction' && call?.kind !== 'keyedRetire') return false;
+    const entry = entries.find((e) => JSON.parse(e.description).preamble?.title === call.contract);
+    const x = entry ? JSON.parse(entry.description)['x-joust'] : null;
+    const meta = (x?.actions ?? []).find((m) => m.kind === call.kind && m.name === call.method);
+    return !!meta && !meta.ctx && !(meta.policies?.validAfter?.length) && !(meta.policies?.validBefore?.length);
+  };
+  const remember = (prepared, kind, untimedWindow = false) => {
+    if (prepared?.reservation) reservations.set(prepared.reservation, { txHash: prepared.txHash, validTo: prepared.validTo, kind, untimedWindow });
   };
 
   return {
@@ -158,6 +170,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     fingerprint: fp.digest,
     entries,
     verifiers: fp.verifiers ?? null,
+    engineFiles: fp.engineFiles ?? null,
     ledger: chain,
     host,
     init,
@@ -202,7 +215,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
       const now = chain.slot;
       const r = await forward('prepare', { now, ttlSlots: TTL_SLOTS, call });
-      remember(r.prepared, 'call');
+      remember(r.prepared, 'call', untimed(call));
       return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: chain.slot, contract, instance, view, args }),
@@ -235,7 +248,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       if (hash !== r.txHash) throw new StageError('session', 'otherBody', 'the signed transaction is not the reserved body');
       const before = chain.attacks().length;
       try {
-        await chain.submit(cbor);
+        await chain.submit(cbor, { untimedWindow: r.untimedWindow });
       } catch (e) {
         if (!(e instanceof LedgerRefusal)) throw e;
         reservations.delete(reservation);

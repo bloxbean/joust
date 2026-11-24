@@ -165,7 +165,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
   const evaluate = (cbor, refs) => engine.joust.evaluate({ tx: cbor, snapshot: snapshotJson(refs), zeroSlot: 0n, zeroTimeMs: BigInt(zeroTimeMs),
     slotLengthMs: BigInt(slotLengthMs) });
 
-  async function check(cbor, v) {
+  async function check(cbor, v, { untimedWindow = false } = {}) {
     const p = protocolParams;
     if (!v.isValid) {
       throw new LedgerRefusal('ValidityTagMismatch', 'the transaction is tagged invalid (is_valid = false): the in-memory ledger applies'
@@ -420,7 +420,10 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
         }
       }
       if (attacksOn) {
-        const a = engine.joust.attacks({ tx: cbor, snapshot: snapshotJson(refs), zeroSlot: 0n, zeroTimeMs: BigInt(zeroTimeMs), slotLengthMs: BigInt(slotLengthMs) });
+        // untimedWindow (the caller's, from the description): the window is a keyed attempt's bookkeeping, read by no
+        // script, so its bounds are not attacked. Without it every transaction with both bounds gets the range attacks.
+        const a = engine.joust.attacks({ tx: cbor, snapshot: snapshotJson(refs), zeroSlot: 0n, zeroTimeMs: BigInt(zeroTimeMs),
+          slotLengthMs: BigInt(slotLengthMs), untimedWindow: !!untimedWindow });
         if (!a.ok) throw new Error('the attack suite could not run: ' + a.error);
         for (const x of a.attacks) attackLog.push({ tx: v.hash, name: x.name, invariant: x.invariant, refused: x.refused, detail: x.detail });
       }
@@ -524,13 +527,18 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     async scriptCbor(hash) {
       return scripts.get(hash) ?? null;
     },
-    async submit(cbor) {
+    /**
+     * Submits a signed transaction. {@code untimedWindow}: the caller knows from the anchored description that no script
+     * reads the window (a keyed action or retire whose method reads no time), so the attack suite skips the range
+     * attacks; offline() and joust test never set it.
+     */
+    async submit(cbor, { untimedWindow = false } = {}) {
       // One at a time: a transaction is checked against the ledger as the previous submission left it (review r2 C9:
       // two concurrent spends of one output both passed their checks before either applied).
       const run = queue.then(async () => {
         const v = ledgerTx(cbor);
         if (txs.has(v.hash)) return v.hash;
-        await check(cbor, v);
+        await check(cbor, v, { untimedWindow });
         apply(cbor, v);
         return v.hash;
       });

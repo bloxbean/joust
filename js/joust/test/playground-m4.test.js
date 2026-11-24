@@ -53,6 +53,9 @@ async function project() {
     cpSync(join(repo, `examples/${dir}/src/main/java/org/julclang/state/examples/${dir}/${name}.java`), join(r, 'contracts', name + '.java'));
   }
   cpSync(join(repo, 'julc-state-host/src/test/java/org/julclang/state/host/fixture/HostCouncil.java'), join(r, 'contracts/HostCouncil.java'));
+  // A @ValidBefore method without Ctx, beside the same rule with Ctx (review M4-D1).
+  mkdirSync(join(r, 'contracts/app'), { recursive: true });
+  cpSync(new URL('./playground/Deadline.java', import.meta.url), join(r, 'contracts/app/Deadline.java'));
   writeFileSync(join(r, 'joust.config.json'), '{ "contracts": "contracts" }');
   const { build } = await import('../src/build.js');
   const b = await build({ root: r, log: () => {} });
@@ -142,12 +145,35 @@ describe('ADR-0024 M4 call kinds, through the page\'s check', { skip }, () => {
     assert.equal(key, cast.prepared.object, 'the key, as the body makes it');
     const change = await run(s, await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key,
       args: { choice: '2' } }, alice), { caller: alice });
-    // change reads no time: its attempt's window is bookkeeping, so the attack suite tampers with no bound of it (and the
-    // scripts accept no attack).
+    // change reads no time: its attempt's window is bookkeeping (the session says so from the description), so the attack
+    // suite tampers with no bound of it, and the scripts accept no attack.
     assert.deepEqual(change.res.acceptedAttacks, []);
+    const ran = s.ledger.attacks().filter((a) => a.tx === change.res.txHash).map((a) => a.name);
+    assert.ok(ran.length > 0 && !ran.some((n) => /bound/.test(n)), ran.join(', '));
     // Bob is not the voter: his change is refused (signedBy against the keyed target).
     await assert.rejects(run(s, await designate(s, { contract: REGISTRY, kind: 'keyedAction', method: 'change', instance, object: key,
       args: { choice: '3' } }, bob), { caller: bob }));
+  });
+
+  test('range attacks: a @ValidBefore method without Ctx has its bounds attacked, as one with Ctx', async () => {
+    const D = 'app.Deadline';
+    await publishAll(s, D, alice);
+    const deadline = String(BigInt(s.status().clock.zeroTimeMs) + 10n ** 12n);
+    const init = await run(s, { contract: D, kind: 'init', method: 'init', args: { deadline } }, { caller: alice });
+    const instance = init.report.created;
+    for (const method of ['bump', 'bumpCtx']) {
+      const r = await run(s, { contract: D, kind: 'action', method, instance, args: {} }, { caller: alice });
+      const ran = s.ledger.attacks().filter((a) => a.tx === r.res.txHash);
+      const range = ran.filter((a) => /bound/.test(a.name));
+      assert.equal(range.length, 4, `${method}: ${ran.map((a) => a.name).join(', ')}`);
+      if (method === 'bumpCtx') assert.deepEqual(r.res.acceptedAttacks, [], 'Ctx binds both bounds: every attack is refused');
+      else {
+        // @ValidBefore alone binds upper <= deadline: without an upper bound the call is refused; a window moved within
+        // the deadline is accepted, and the page shows it as a warning (the attack suite errs towards more warnings).
+        assert.equal(range.find((a) => a.name === 'upper bound removed').refused, true);
+        assert.ok(r.res.acceptedAttacks.every((a) => /bound/.test(a.name)), JSON.stringify(r.res.acceptedAttacks));
+      }
+    }
   });
 
   test('D11: @Params and @AuthorizedBy are shown unsupported with the host\'s code', async () => {
