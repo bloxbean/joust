@@ -517,6 +517,32 @@ describe('ADR-0024 M3: the journal (Q6, ADR-0022 D8)', () => {
     }
   });
 
+  test('final pass (Codex): a failed sync of a directory another user owns is an error (only one that cannot be opened is skipped)', async () => {
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const uid = process.getuid();
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'joust-foreign-')));
+    const fsync = fs.fsyncSync;
+    let failed = null;
+    fs.fsyncSync = (fd) => {
+      const st = fs.fstatSync(fd);
+      if (failed === null && st.isDirectory() && st.uid !== uid) {   // an ancestor another user owns (root's, here)
+        failed = st;
+        throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' });
+      }
+      return fsync(fd);
+    };
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(openJournal({ root: '/p/foreign', chain: identity(20), state: join(base, 'state') }), /EIO/);
+      assert.ok(failed, 'an ancestor owned by another user was synced');
+    } finally {
+      fs.fsyncSync = fsync;
+      syncBuiltinESMExports();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   test('FD4: a lock held by a running playground is refused naming its file', async () => {
     const j = await open('/p/held', 17);
     try {

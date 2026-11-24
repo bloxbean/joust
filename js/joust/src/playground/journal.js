@@ -107,17 +107,25 @@ function alive(pid) {
 /**
  * Every component from {@code dir} up to the filesystem's root made durable in its parent, on every open (final pass):
  * a first run creates ~/.joust, its state, chains and the chain's directory, and a retry after a failed sync cannot tell
- * which of them still need it. A directory of this user's must sync; another's (above the state directory, not ours)
- * that cannot be opened is skipped.
+ * which of them still need it. Only a directory that is not this user's and cannot be opened (EACCES, EPERM: above the
+ * state directory, not ours) is skipped; any failure to sync one that opened is an error, whoever owns it.
  */
 function syncAncestors(dir) {
+  if (process.platform === 'win32') return;
   const uid = process.getuid?.();
   for (let p = dir; dirname(p) !== p; p = dirname(p)) {
     const parent = dirname(p);
+    let fd;
     try {
-      syncDir(parent);
+      fd = openSync(parent, 'r');
     } catch (e) {
-      if (uid === undefined || lstatSync(parent).uid === uid) throw e;
+      if ((e.code === 'EACCES' || e.code === 'EPERM') && uid !== undefined && lstatSync(parent).uid !== uid) continue;
+      throw e;
+    }
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
   }
 }
