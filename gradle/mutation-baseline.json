@@ -120,15 +120,35 @@
       "scope": "joust",
       "score": 62.0
     },
+    "js/state-client/src/claims.js": {
+      "mutants": 150,
+      "scope": "state-client",
+      "score": 82.7
+    },
+    "js/state-client/src/compose.js": {
+      "mutants": 1161,
+      "scope": "state-client",
+      "score": 56.7
+    },
     "js/state-client/src/keyed.js": {
       "mutants": 1542,
       "scope": "state-client",
       "score": 61.7
     },
-    "js/state-client/src/verify.js": {
-      "mutants": 1003,
+    "js/state-client/src/ledger.js": {
+      "mutants": 485,
       "scope": "state-client",
-      "score": 8.6
+      "score": 41.9
+    },
+    "js/state-client/src/purposes.js": {
+      "mutants": 404,
+      "scope": "state-client",
+      "score": 44.6
+    },
+    "js/state-client/src/verify.js": {
+      "mutants": 1201,
+      "scope": "state-client",
+      "score": 60.2
     }
   }
 }

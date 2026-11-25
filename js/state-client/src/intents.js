@@ -2,12 +2,13 @@
 // batcher. Each prepared transaction is verified against the description before the wallet signs, as for calls:
 // nothing beyond the operation, the wallet's funds bounded, every datum and redeemer the page's own.
 
-import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise, scriptBearingChecks } from './verify.js';
+import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise, integrityChecks, scriptBearingChecks } from './verify.js';
 import { parseTx, addressParts } from './ledger.js';
 import { codec as makeCodec, dataEqual } from './data.js';
 import { bytesToHex } from './hex.js';
 import { blake2b } from '@noble/hashes/blake2.js';
 import { hexToBytes } from './hex.js';
+import { Data } from './pdata.js';
 
 /** An intent's token: 0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes. */
 export function intentIdOf(txHash, index) {
@@ -51,6 +52,8 @@ async function frame({ deployment, txHex, wallet, chain, limits, scriptInput, wa
   if (tx.withdrawals.length > 0) problems.push('withdrawals');
   if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
+  // The body commits to the redeemers and datums verified below.
+  integrityChecks(tx, chain.params, problems);
 
   // Inputs, in ledger order (the redeemers' indexes).
   const sorted = ledgerOrder(tx.inputs);
@@ -154,6 +157,16 @@ async function frame({ deployment, txHex, wallet, chain, limits, scriptInput, wa
   const net = new Map(spent);
   add(net, back, -1n);
   return { problems, tx, body: tx, walletInputs, scriptInputs, spends, mints, minted, outputs, fee, net };
+}
+
+/** Whether {@code datum} tags one of the intents {@code refs}: the bare reference (a payout) or IntentRefund(ref). */
+function intentTag(datum, refs) {
+  if (!datum) return false;
+  return refs.some((r) => {
+    const [h, i] = r.split('#');
+    const bare = Data.constr(0, [Data.bytes(h), Data.int(BigInt(i))]);
+    return dataEqual(datum, bare) || dataEqual(datum, Data.constr(0, [bare]));
+  });
 }
 
 function onlyUnits(minted, want) {
@@ -347,10 +360,15 @@ export async function verifyBatch(o) {
   }
   const continuing = f.outputs.filter((x) => x.value.get(instanceUnit) === 1n);
   if (continuing.length !== 1 || continuing[0].address !== deployment.address) problems.push('the instance does not continue at the contract');
-  // The batcher pays the fee, nothing more; it receives at most its own funds back (payouts go to intent owners).
-  const lost = f.net.get('lovelace') ?? 0n;
-  if (lost > f.fee) problems.push(`the wallet loses ${lost} lovelace, more than the fee`);
-  for (const [u, q] of f.net) if (u !== 'lovelace' && q > 0n) problems.push(`the wallet loses ${q} of ${u}`);
-  report.walletNet = lost;
+  // The batcher pays the fee, nothing more. What a batched intent owes the batcher (a refund tagged IntentRefund, a
+  // payout tagged with the intent's input) is the validator's obligation to it, not its change: counted as change, it
+  // would let the service divert as much of the batcher's own funds elsewhere.
+  const intents = f.scriptInputs.filter((s) => s.utxo.value.get(instanceUnit) !== 1n).map((s) => s.ref);
+  const change = new Map(f.net);
+  for (const o of f.outputs) if (o.wallet && intentTag(o.datum, intents)) add(change, o.value);
+  const lost = change.get('lovelace') ?? 0n;
+  if (lost > f.fee) problems.push(`the wallet loses ${lost} lovelace of its own, more than the fee`);
+  for (const [u, q] of change) if (u !== 'lovelace' && q > 0n) problems.push(`the wallet loses ${q} of ${u}`);
+  report.walletNet = f.net.get('lovelace') ?? 0n;
   return { problems, report };
 }

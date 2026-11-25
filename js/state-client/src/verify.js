@@ -1,20 +1,23 @@
 // Verifies a prepared transaction before a CIP-30 wallet signs it (ADR-0013 D2), against what the page knows itself:
 // the contract's bundled description and deployment (the pinned script), the wallet's own UTxOs, the chain (tip,
 // protocol parameters, the UTxOs the transaction reads), and the call the page asked for. The service that prepared
-// the transaction is not trusted for any of it.
+// the transaction is not trusted for any of it; the chain provider the app chose and the wallet are (ADR-0015 §5).
 //
 // What the page does not check, the pinned validator does: the next state (or object) is exactly what the contract's
 // method computes from the call, payouts are paid, and the script's value is conserved. So the page checks that the
 // transaction makes exactly the call it asked for, on the pinned script, and that the wallet risks nothing else: it
-// loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA.
+// loses at most the payment, the fee and (for a creation) the new UTxO's minimum ADA; others are paid only from what the
+// script releases beyond its payouts and its claimed sends to the wallet, plus the payment the redeemer binds. Rules
+// the validators enforce on chain and that do not bound the wallet's loss are left to them.
 
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
 import { bytesToHex } from './hex.js';
 import { approvalsData, rewardAddressOf } from './governors.js';
-import { parseTx, addressParts } from './ledger.js';
-import { dataHex } from './pdata.js';
+import { parseTx, addressParts, integrityHashOf } from './ledger.js';
+import { dataHex, decodeData } from './pdata.js';
 import { isKeyedCall, verifyKeyed } from './keyed.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -80,7 +83,8 @@ export function redeemerDefs(c, description) {
  * @param o.deployment   { policy, address (bech32), networkId, referenceScripts?: ["tx#i"] } (bundled with the page)
  * @param o.call         { kind, meta (the x-joust action or creation), args, pay: { lovelace, assets? }, instance, object }
  * @param o.wallet       { addresses: [bech32], keyHashes: [hex], utxos: Map ref -> { address, value: Map } }
- * @param o.chain        { tip (slot), params, utxo: async ref -> { address, value: Map, referenceScriptHash } | null }
+ * @param o.chain        { tip (slot), params (with a PlutusV3 cost model: the script integrity hash), utxo: async ref ->
+ *                       { address, value: Map, referenceScriptHash, inlineDatum (hex; an owned destroy's Holding) } | null }
  * @returns { problems: string[], report }
  */
 export async function verifyPrepared(o) {
@@ -151,6 +155,7 @@ export async function verifyPrepared(o) {
   let targetIndex = -1;
   let targetRef = null;
   let targetValue = new Map();
+  let targetDatum = null;
   const walletInputs = new Set();
   for (let i = 0; i < sorted.length; i++) {
     const r = sorted[i];
@@ -165,6 +170,7 @@ export async function verifyPrepared(o) {
       targetIndex = i;
       targetRef = r;
       targetValue = u.value;
+      targetDatum = u.inlineDatum ?? null;
       add(consumed, u.value);
     } else {
       problems.push(`an input that is neither the wallet's nor the ${call.kind.startsWith('owned') ? 'object' : 'instance'}: ${r}`);
@@ -172,6 +178,14 @@ export async function verifyPrepared(o) {
   }
   if (targetUnit && targetIndex < 0) problems.push('the pinned instance or object is not spent');
   report.targetRef = targetRef;
+  // A consistency check of the page's own call: an owned destroy leaves no continuation to decode, so the object's input
+  // datum (its Holding, as the chain provider gives it) must name the call's instance, as decodeNext checks for an owned
+  // action's continuation.
+  if (call.kind === 'ownedDestroy' && targetRef && heldBy(c, xj, call, targetDatum) !== call.instance) {
+    problems.push(`${call.meta.name}: the object is held by another instance than the call's`);
+  }
+  // A method that is not payable takes no lovelace (as client.js and verifyComposed refuse).
+  if (call.meta.payable === false && pay.lovelace !== 0n) problems.push(`${call.meta.name}: it is not payable, but the page pays ${pay.lovelace} lovelace`);
 
   // Redeemers: exactly the call (and a destroy's burn), on the pinned script.
   const rds = tx.redeemers;
@@ -197,6 +211,8 @@ export async function verifyPrepared(o) {
   const mintPolicies = [...new Set([...minted.keys()].map((u) => u.slice(0, 56)))];
 
   let createdUnit = null;
+  let acceptsAssets = false;
+  let paymentBound = false;      // the redeemer's Ctx states the payment (the validator checks it receives that)
   const callFields = (def, r, what) => {
     let decoded;
     try {
@@ -220,6 +236,9 @@ export async function verifyPrepared(o) {
       return;
     }
     const argNames = new Set(call.meta.args.map((a) => a.name));
+    // An offer of assets binds only through the redeemer's assetsIn: a method without one takes none.
+    acceptsAssets = alt.fields.some((f) => f.title === 'assetsIn');
+    if (!acceptsAssets && [...pay.assets].length) problems.push('the call takes no assets, but the page offers some');
     alt.fields.forEach((f, i) => {
       const actual = fields[i];
       if (argNames.has(f.title)) {
@@ -235,6 +254,7 @@ export async function verifyPrepared(o) {
         const ctx = decoded.ctx;
         if (!wallet.keyHashes.includes(ctx.caller)) problems.push('the call\'s caller is not this wallet');
         if (ctx.received !== pay.lovelace) problems.push(`the call receives ${ctx.received} lovelace, not the ${pay.lovelace} the page pays`);
+        else paymentBound = true;
       } else if (f.title === 'assetsIn') {
         const want = c.encode(f, pay.assets, 'assetsIn');
         if (!dataEqual(want, actual)) problems.push('the call offers other assets than the page pays');
@@ -264,18 +284,28 @@ export async function verifyPrepared(o) {
       if (r.index !== targetIndex) problems.push('the redeemer is not on the target input');
       checkCall(callFields(rdefs.spend, r, 'the call'));
     }
+    // A destroy burns exactly its token. With a user mint besides (a destroy whose method mints), the policy's one
+    // mint redeemer is ByAction naming the target, and the policy checks the burn and the mint together (mintMatches;
+    // the runtime's AssetTx builds it so); else it is BurnInstance and the burn is the whole mint.
+    const userMint = [...minted.keys()].some((u) => u !== targetUnit);
     if (DESTROYS.has(call.kind)) {
-      if (minted.size !== 1 || minted.get(targetUnit) !== -1n) problems.push('a destroy must burn exactly its token');
+      if (minted.get(targetUnit) !== -1n) problems.push('a destroy must burn exactly its token');
       if (mints.length !== 1) problems.push('a destroy needs exactly one burn redeemer');
-      else {
+    }
+    if (DESTROYS.has(call.kind) && !userMint) {
+      if (mints.length === 1) {
         const got = callFields(rdefs.mint, mints[0], 'the burn');
         if (got && (got.alt.title !== 'BurnInstance' || got.alt.fields.length !== 0)) problems.push('the burn redeemer is not BurnInstance');
       }
     } else if (call.meta.returns?.mint) {
-      // A method that mints the contract's own tokens (ADR-0007 D4): only under the pinned policy, never its thread
-      // tokens, with one ByAction redeemer naming the target it spends; the amounts are the method's, checked on chain.
-      for (const unit of minted.keys()) {
+      // A method that mints the contract's own tokens (ADR-0007 D4): only under the pinned policy, never a reserved
+      // name (a thread token's or an owned object's or an intent's: the policy refuses them, I27) other than a
+      // destroy's own burn, with one ByAction redeemer naming the target it spends; the amounts are the method's,
+      // checked on chain.
+      for (const [unit, q] of minted) {
+        if (DESTROYS.has(call.kind) && unit === targetUnit && q === -1n) continue;
         if (!unit.startsWith(policy) || unit === targetUnit) problems.push(`a mint of ${unit}, not one of the contract's own tokens`);
+        else if (reservedName(unit.slice(56), !!xj.keyed)) problems.push(`a mint of ${unit}, a reserved token name`);
       }
       if (minted.size && mints.length !== 1) problems.push('a mint needs exactly one ByAction redeemer');
       if (!minted.size && mints.length) problems.push('a mint redeemer without a mint');
@@ -305,6 +335,12 @@ export async function verifyPrepared(o) {
     { txId: targetRef.split('#')[0], index: targetRef.split('#')[1] }) : null;
   const back = new Map();          // every wallet output
   const tagged = new Map();        // wallet outputs carrying the payout tag (the script's payouts to the wallet)
+  // Wallet outputs the output verifier's claims name for the target (ADR-0007 D5): the script's sends to the wallet,
+  // never its change (on chain a send to the wallet's address may name any output there that covers it). No deposits:
+  // they need their receiver in the same composition (ADR-0011 D3), and a receiver credits any claim on its output.
+  const registry = outputRegistry(tx, deployment.outputVerifier, problems);
+  if (registry?.deposits.length) problems.push('a deposit claim in a single call (deposits are verified only in a composition with their receiver)');
+  const claimed = claimedSends(tx, [{ registry, owners: targetRef ? [targetRef] : [] }], isWallet, problems);
   const third = new Map();         // outputs to anyone else
   let continuation = new Map();
   const continuingUnit = createdUnit ?? (DESTROYS.has(call.kind) ? null : targetUnit);
@@ -313,10 +349,9 @@ export async function verifyPrepared(o) {
   for (const out of tx.outputs) {
     const value = out.value;
     for (const unit of value.keys()) {
-      // Another token of the contract (another instance's or object's) may not move, except the tokens this call
-      // mints itself (a minting method's own tokens, ADR-0007 D4).
-      const mintedHere = call.meta.returns?.mint && (minted.get(unit) ?? 0n) > 0n;
-      if (unit.startsWith(policy) && unit !== continuingUnit && unit.length > 56 && !mintedHere) problems.push('an output carries another token of the contract');
+      // A thread token (a reserved name: an instance's, an owned object's, an intent's, a keyed object's) other than
+      // the continuing one may not move. The contract's user tokens are bounded per unit like any other asset.
+      if (unit.startsWith(policy) && unit !== continuingUnit && reservedName(unit.slice(56), !!xj.keyed)) problems.push('an output carries another token of the contract');
     }
     if (isWallet(out.address)) {
       if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
@@ -378,14 +413,24 @@ export async function verifyPrepared(o) {
     if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
-  // Other parties are paid only from what the script releases beyond its payouts to the wallet: a payout to the
-  // wallet must never hide the wallet's own funds going elsewhere (review r4, Critical).
+  // Other parties are paid only from what the script releases beyond its payouts and its claimed sends to the wallet,
+  // plus the payment the call takes (credit): neither may hide the wallet's own funds, or the script's release to it,
+  // going elsewhere (review r4, Critical). This is the rule that protects the wallet. The validator settles the call
+  // exactly (I3, I8, I26: continuation = target + received + accepted + mint - payouts - sends), so the release plus
+  // the payment is what the call owes in payouts and sends; others then receive exactly what is owed to them and
+  // nothing of the wallet's. The payment counts only where the redeemer binds it: lovelace where Ctx states it
+  // (`received`), assets where `assetsIn` names them. A claimed send output is subtracted whole, including what the
+  // wallet added to bring a send below its minimum ADA up to it (the page cannot tell that from lovelace the script
+  // sends): a method that sends the caller less than the minimum ADA and pays released lovelace to others should give
+  // the send its own minimum ADA.
   const released = new Map(targetValue);
   add(released, continuation, -1n);
   add(released, minted);
+  const credit = SPEND_KINDS.has(call.kind) && targetRef ? boundPayment(pay, paymentBound, acceptsAssets) : new Map();
   for (const [unit, q] of third) {
-    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n);
-    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the script releases to them`);
+    const free = (released.get(unit) ?? 0n) + (credit.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const sends = claimed.indexes.size ? ' beyond its claimed sends to the wallet' : '';
+    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the script releases to them${sends}`);
   }
   report.fee = fee;
   report.walletNet = net.get('lovelace') ?? 0n;
@@ -425,10 +470,74 @@ export function scriptBearingChecks(tx, wallet, problems) {
 }
 
 /**
- * The checks every single call shares (ADR-0013 D2): the fee, the collateral, the validity interval and the signers.
- * Shared by the keyed calls' verifier (ADR-0016 D11).
+ * A language's cost model from the chain's parameters, as a list in the ledger's order: Blockfrost's cost_models_raw,
+ * else cost_models when it is a list or keyed by position ("000", "001", ...: Yaci Store); null otherwise (a model
+ * keyed by parameter name has no order the page can rely on).
+ */
+function costModelOf(params, language) {
+  const raw = params?.cost_models_raw?.[language];
+  if (Array.isArray(raw)) return raw;
+  const named = params?.cost_models?.[language];
+  if (Array.isArray(named)) return named;
+  if (!named || typeof named !== 'object') return null;
+  const keys = Object.keys(named);
+  if (keys.length === 0 || !keys.every((k) => /^\d+$/.test(k))) return null;
+  return keys.map(Number).sort((a, b) => a - b).every((n, i) => n === i) ? keys.sort((a, b) => Number(a) - Number(b)).map((k) => named[k]) : null;
+}
+
+/**
+ * The script integrity hash (Conway): the wallet signs the body only, and the body commits to the witness set's
+ * redeemers and datums through this hash. Every verifier reads the call, the claims and the approvals from the witness
+ * set, so the body must commit to exactly those, else whoever holds the signed body could submit it with other
+ * redeemers. The hash is recomputed from the witness set's own bytes, with the languages of its Plutus scripts and
+ * PlutusV3 (every JOUST script's) over the chain API's cost models. This is sound whatever cost models the chain API
+ * gives: blake2b-256 binds the reviewed redeemers and datums and the cost models together, so a body that matches them
+ * under any cost models cannot match other redeemers on chain. Wrong cost models only refuse. Shared by every page
+ * verifier (single and keyed calls, compositions, purposes, registrations, intents), with one redeemer per purpose.
+ */
+export function integrityChecks(tx, params, problems) {
+  // One redeemer per purpose (tag and index), as the ledger keys them: a verifier that looks for one with `some` could
+  // otherwise read another than the ledger runs.
+  const purposes = new Set();
+  for (const r of tx.redeemers) {
+    const key = `${r.tag}#${r.index}`;
+    if (purposes.has(key)) problems.push(`two redeemers for the ${r.tag} purpose at index ${r.index}`);
+    purposes.add(key);
+  }
+  const { parts, redeemerCount, datumCount, languages } = tx.integrity;
+  if (redeemerCount === 0 && datumCount === 0) {
+    if (tx.scriptDataHash) problems.push('a script integrity hash without redeemers or datums');
+    return;
+  }
+  // The languages of the scripts that run: none without redeemers (datums alone, an empty view map), else PlutusV3
+  // (every JOUST script's) and the witness set's own Plutus scripts'.
+  const langs = redeemerCount === 0 ? [] : [...new Set(['PlutusV3', ...languages])];
+  const costModels = {};
+  for (const l of langs) {
+    const m = costModelOf(params, l);
+    if (!m) {
+      problems.push(`the chain gives no ${l} cost model, so the script integrity hash cannot be checked`);
+      return;
+    }
+    costModels[l] = m;
+  }
+  let want;
+  try {
+    want = integrityHashOf(parts, langs, costModels);
+  } catch (e) {
+    problems.push(`the script integrity hash cannot be computed: ${e.message}`);
+    return;
+  }
+  if (want.unsupported) problems.push(`the script integrity hash cannot be checked (${want.unsupported})`);
+  else if (tx.scriptDataHash !== want.hash) problems.push('the script integrity hash does not commit to the redeemers and datums the page verified');
+}
+
+/**
+ * The checks every single call shares (ADR-0013 D2): the fee, the collateral, the validity interval, the signers and
+ * the script integrity hash. Shared by the keyed calls' verifier (ADR-0016 D11).
  */
 export function envelopeChecks({ tx, txHex, call, wallet, chain, deployment, limits, isWallet }, problems) {
+  integrityChecks(tx, chain.params, problems);
   const rds = tx.redeemers;
   const fee = tx.fee;
   // The fee: at most what the protocol asks for this size and these budgets, with a margin.
@@ -565,6 +674,17 @@ export function paymentKeyHashOf(...args) {
   }
 }
 
+/**
+ * Whether a token name (hex) is reserved for a contract's own tokens under its policy (ADR-0016): 32 bytes (an
+ * instance's), 29 bytes from 0x4F (an owned object's) or 0x49 (an intent's), and in a keyed contract 29 bytes from 0x4B
+ * (a keyed object's). Never a user token's.
+ */
+export function reservedName(nameHex, keyed) {
+  const len = nameHex.length / 2;
+  const kind = nameHex.slice(0, 2);
+  return len === 32 || (len === 29 && (kind === '4f' || kind === '49' || (keyed && kind === '4b')));
+}
+
 /** An enterprise address of one of the wallet's payment keys: no stake credential, so wholly the wallet's. */
 export function isWalletEnterprise(bech32, wallet) {
   try {
@@ -582,4 +702,25 @@ export function decodeNext(c, xj, call, datum) {
   const holding = c.decode(owned.holding, datum);
   if (holding.instance !== call.instance) throw new Error('the object belongs to another instance');
   return holding.value;
+}
+
+/**
+ * The payment a call takes, as its redeemer binds it (Map unit -> bigint): its lovelace where Ctx states it
+ * ({@code ctxBound}: `received` equals the payment), its offered assets where `assetsIn` names them ({@code
+ * acceptsAssets}). Shared by verifyPrepared and verifyComposed.
+ */
+export function boundPayment(pay, ctxBound, acceptsAssets) {
+  const paid = new Map([['lovelace', ctxBound ? pay.lovelace : 0n]]);
+  if (acceptsAssets) for (const [p, assets] of pay.assets) for (const [n, q] of assets) paid.set(p + n, (paid.get(p + n) ?? 0n) + BigInt(q));
+  return paid;
+}
+
+/** The instance an owned object's datum (hex) says it is held by, or null when it does not decode as the call's Holding. */
+export function heldBy(c, xj, call, datumHex) {
+  try {
+    const owned = xj.owned.find((o) => o.type === call.meta.owned);
+    return owned && datumHex ? c.decode(owned.holding, decodeData(datumHex)).instance : null;
+  } catch {
+    return null;
+  }
 }

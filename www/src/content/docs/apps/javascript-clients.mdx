@@ -187,6 +187,10 @@ await rt.compose(buyer, [
 `verifyComposed` checks each call against its own description and deployment, then the transaction as a whole.
 `extra` may carry `onReview` (called with `{ calls, report, txHash }`) and `limits`.
 
+Others may receive only what the calls release beyond their payouts and sends to the wallet, plus the payments the
+calls take (a purchase paying the seller, a refund to the caller). A payment counts only where the call's Ctx states
+it (lovelace) or its `assetsIn` names it (assets), and a method that is not payable takes none.
+
 ## Prepare services
 
 A prepare service is any object with `prepare(request)`. Clients do not care which one they get:
@@ -224,6 +228,15 @@ itself: the pinned description and deployment, the wallet's UTxOs, the chain (ti
 transaction reads) and the call it asked for. Nothing the service says is taken on trust: the transaction hash is the
 client's own, computed from the body bytes, and the service's plan must match the plan the client derives.
 
+The verifier guards against the prepare service, which is untrusted. The chain provider the app chose (Blockfrost,
+Yaci Store, Ogmios, ...) and the wallet are trusted, as in any cardano-client-lib or MeshJS app: the page already
+builds transactions from the provider's UTxOs. Input values and datums are the provider's or the wallet's answer, so
+the verifier needs no transaction CBOR and works with every supported provider (keyed calls still read it where the
+provider serves it). Reach the provider directly, or through a host other than the prepare service: a provider
+proxied by the service is as untrusted as the service. That rule is about a remote prepare service: `joust dev`
+serving `/chain` and `/joust/service` from one host is fine, since that host is your own machine. Defending against a
+lying provider is out of scope.
+
 | Call | Verifier (`@julclang/state-client`) |
 |---|---|
 | creations, actions, destroys, owned calls | `verifyPrepared` |
@@ -243,7 +256,16 @@ For a single call, `verifyPrepared` refuses:
   minted by a creation; any mint under another policy;
 - anything but exactly one continuation of the instance or object, with an inline datum that decodes;
 - a transaction that does not balance; a wallet losing more than its payment plus the fee (plus the minimum ADA of a
-  new UTxO); others receiving more than the script releases;
+  new UTxO); others receiving more than the script releases beyond its payouts and sends to the wallet. An output the
+  output verifier's claims name for a send at a wallet address is the script's send, not the wallet's change, so its
+  whole value is kept from others; a malformed claim set, an output claimed in the registries of two output verifiers,
+  a claim for another input, and a deposit claim outside a composition with its receiver (or not by a call that
+  deposits) are refused. A send to the caller below its output's minimum ADA (tokens without
+  lovelace, or a small lovelace send) is topped up from the wallet, and the page cannot tell that top-up from lovelace
+  the script sends: a transaction with such a send that also pays released lovelace to others (in any of its calls) is
+  refused, unless the send carries at least its own minimum ADA (`Assets.lovelace(min)` with the tokens);
+- a script integrity hash that does not commit to the redeemers and datums the page read (recomputed over the chain
+  API's cost models; every verifier checks it, since the wallet signs only the body);
 - a fee above the protocol's for this size and budget (times 1.2, plus `feeMargin`) or above `maxFee`; execution
   budgets above the protocol's limits;
 - collateral that is not the wallet's, not returned to the wallet, or above `maxCollateral`;
@@ -252,7 +274,10 @@ For a single call, `verifyPrepared` refuses:
   know.
 
 The pinned validator checks the rest on chain: that the next state is what the method computes, that payouts are paid
-and that the script's value is conserved.
+and that the script's value is conserved. Rules the validators enforce that do not bound what the wallet can lose
+(claim order, I30, deposit values) are left to them. An honest node refuses a body that breaks them at submission; at
+worst a block producer could include it phase-2-invalid and take the collateral, which the page bounds by
+`limits.maxCollateral`.
 
 ### `VerificationError`
 

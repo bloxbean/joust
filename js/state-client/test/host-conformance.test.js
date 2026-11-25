@@ -11,12 +11,12 @@ const common = new Set(['mint', 'fee', 'balance', 'signer', 'pointer', 'redeemer
 
 // Negative vectors (by `mutation`) whose protocol-1 check the page verifier does not make yet: the page accepts them
 // where the reference refuses. Each still runs and must still be accepted, so an entry fails once verify.js gains the
-// check and has to be removed. The ten `claims` entries close with branch fix/verify-wallet-sends (ADR-0013 §9.2).
-const claims = 'the output verifier\'s claims (closes with fix/verify-wallet-sends)';
+// check and has to be removed. Branch fix/verify-wallet-sends (ADR-0013 §9.2, claims.js) closed the claims' shape, range,
+// claimants and wallet accounting; the claims' order and distinctness it leaves to the output verifier on chain.
+const claimsOrder = 'the claims\' order and distinct outputs (the output verifier checks them on chain)';
+const claimedTag = 'no payout tag on a claimed output (protocol rule 6)';
 const pageGaps = {
-  'claims-shape': claims, 'claims-malformed-claim': claims, 'claims-deposits': claims, 'claims-duplicate': claims,
-  'claims-out-of-order': claims, 'claims-out-of-range': claims, 'claims-foreign': claims, 'claimed-send-tagged': claims,
-  'send-claim-on-change': claims, 'send-claim-wallet-funded': claims,
+  'claims-duplicate': claimsOrder, 'claims-out-of-order': claimsOrder, 'claimed-send-tagged': claimedTag,
   'change-at-enterprise': 'change only at the payer address (the page accepts the caller\'s enterprise address)',
   'target-datum': 'the target datum decodes', 'owned-instance-target': 'the owned target names the call\'s instance',
   'signed-by-other': 'signedBy against the target state', 'caller-not-required': 'the caller required for Ctx methods',
@@ -27,16 +27,16 @@ const pageGaps = {
   'collateral-return-datum': 'a clean collateral return', 'collateral-return-script': 'a clean collateral return',
   'collateral-unconserved': 'collateral conservation', 'witness-script': 'witness scripts pinned',
   'missing-holder-reference': 'the policy script supplied',
-  'aux-hash-without-data': 'no auxiliary data hash', 'call-withdrawal-without-sends': 'a withdrawal only for a method with sends',
+  'aux-hash-without-data': 'no auxiliary data hash',
   'collateral-return-enterprise-network': 'the collateral return\'s network', 'collateral-return-inline-datum': 'a clean collateral return',
-  'expired-window': 'an upper bound after now', 'missing-reward-redeemer': 'the verifier withdrawal\'s redeemer',
+  'expired-window': 'an upper bound after now',
   'missing-verifier-reference': 'the verifier script supplied', 'negative-collateral-total': 'a nonnegative total collateral',
   'short-signer': 'required signers are key hashes',
   'keyed-designated-record': 'the designated input equals the persisted operation record\'s',
   'keyed-signed-by': 'signedBy against the keyed target\'s state',
   'map-verifier-reference': 'the map verifier script supplied',
-  // #153 Codex review: the kit refuses these two; the page does not yet (bloxbean/joust#162).
-  'claimed-third-party-tagged': claims, 'owned-destroy-wrong-parent': 'the owned target names the call\'s instance',
+  // #153 Codex review: the kit refuses this one; the page does not (bloxbean/joust#162).
+  'claimed-third-party-tagged': claimedTag,
   // #156 Codex review: keyed change at the caller's enterprise address (protocol rule 6); keyed.js counts that address
   // as the wallet's (bloxbean/joust#162).
   'keyed-change-at-enterprise': 'keyed change at the payer\'s address',

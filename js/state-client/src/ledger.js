@@ -8,6 +8,7 @@
 import { Serialization, Cardano } from '@cardano-sdk/core';
 import { decodeData } from './pdata.js';
 import { hexToBytes, bytesToHex } from './hex.js';
+import { blake2b } from '@noble/hashes/blake2.js';
 
 export class LedgerError extends Error {}
 
@@ -99,6 +100,14 @@ export function parseTx(hex) {
     hasDonation: !!b.donation,
     hasTreasuryValue: b.treasuryValue !== undefined,
     plutusScripts: (c.witness.scripts ?? []).filter((s) => s.__type === 'plutus').length,
+    // What the body's script integrity hash commits to (Conway): the witness set's redeemers and datums as the
+    // transaction encodes them, how many there are, and the languages of its Plutus scripts (verify.js integrityChecks).
+    integrity: {
+      parts: integrityParts(hex),
+      redeemerCount: redeemers.length,
+      datumCount: tx.witnessSet().plutusData()?.values().length ?? 0,
+      languages: [...new Set((c.witness.scripts ?? []).filter((s) => s.__type === 'plutus').map((s) => `PlutusV${s.version + 1}`))],
+    },
   };
 }
 
@@ -152,9 +161,13 @@ function integrityParts(hex) {
   r.readStartArray();
   r.readEncodedValue();                                     // the body
   const parts = { redeemers: null, datums: null };
+  const seen = new Set();
   const n = r.readStartMap();
   for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
     const key = Number(r.readInt());
+    // One reading of the witness set: the hash covers these bytes, and the verifiers read the SDK's parse of them.
+    if (seen.has(key)) throw new LedgerError(`the witness set repeats key ${key}`);
+    seen.add(key);
     const value = bytesToHex(r.readEncodedValue());
     if (key === 5) parts.redeemers = value;
     if (key === 4) parts.datums = value;
@@ -171,6 +184,11 @@ const LANGUAGE_IDS = { PlutusV1: 0, PlutusV2: 1, PlutusV3: 2 };
  * form) is not computed: null is returned with {@code unsupported}.
  */
 export async function scriptIntegrityHash(parts, languages, costModels) {
+  return integrityHashOf(parts, languages, costModels);
+}
+
+/** scriptIntegrityHash, synchronously (blake2b-256 by @noble/hashes): what the page verifiers check a body against. */
+export function integrityHashOf(parts, languages, costModels) {
   if (!parts.redeemers && !parts.datums) return { hash: null };
   const langs = [...new Set(languages)].sort((a, b) => LANGUAGE_IDS[a] - LANGUAGE_IDS[b]);
   if (langs.includes('PlutusV1')) return { hash: null, unsupported: 'PlutusV1 language views' };
@@ -184,9 +202,7 @@ export async function scriptIntegrityHash(parts, languages, costModels) {
     for (const c of costs) w.writeInt(BigInt(c));
   }
   const views = bytesToHex(w.encode());
-  const crypto = await import('@cardano-sdk/crypto');
-  await crypto.ready();
-  return { hash: crypto.blake2b.hash((parts.redeemers ?? 'a0') + (parts.datums ?? '') + views, 32) };
+  return { hash: bytesToHex(blake2b(hexToBytes((parts.redeemers ?? 'a0') + (parts.datums ?? '') + views), { dkLen: 32 })) };
 }
 
 /**

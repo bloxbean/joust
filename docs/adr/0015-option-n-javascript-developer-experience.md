@@ -316,6 +316,8 @@ None of these improves what a JS developer sees, so they wait for the prerequisi
 - **The page verifier must grow with the runtime** before M2 enables the corresponding features: composition,
   verifier withdrawals and Reward redeemers, additional contract inputs, sends and mints. Each comes with tamper
   tests (I5).
+- **The verifier's trust model** is §5's: it guards against the prepare service; the chain provider and the wallet
+  are trusted.
 - **Node version:** whatever runs the engines without flags. F10 shows Node 22 needs
   `--experimental-wasm-exnref`, so the CLI re-launches with it there (Q5).
 
@@ -368,11 +370,18 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 
 - **Trusted:**
   - the developer's machine and the toolchain they install (supply chain: npm provenance, tarball hashes; Q4);
-  - the page's bundle, which includes the runtime engine (served with SRI).
+  - the page's bundle, which includes the runtime engine (served with SRI);
+  - the chain provider the app chose (Blockfrost, Yaci Store, Ogmios, ...) and the wallet, as in any
+    cardano-client-lib or MeshJS app: the page and the Java runtime build transactions from the provider's UTxOs, and
+    the page verifier takes input values and datums from the provider (or the CIP-30 wallet). It needs no transaction
+    CBOR, so it works with what every supported provider serves. The provider must be reached directly or through a
+    host other than the prepare service's: a provider proxied by the service is as untrusted as the service. The rule
+    is about a remote prepare service: `joust dev` serving `/chain` and `/joust/service` from one host is fine, since
+    that host is the developer's own machine. What is still checked: protocol parameters are bounded by the page's limits (`maxFee`), and MerkleMap history and proofs
+    against on-chain roots. Keyed calls (ADR-0016 D11) still read script inputs from transaction CBOR where the
+    provider serves it, as before this decision. A mode that does not trust the provider is issue #169.
 - **Untrusted:**
-  - chain APIs and their snapshots: every answer feeding a transaction goes through the verifier's checks and the
-    ledger (ADR-0013 §9.4, §10.5);
-  - prepare services (ADR-0013 D2), unchanged;
+  - prepare services (ADR-0013 D2), unchanged: the page verifier stands between them and the wallet (I5);
   - descriptions or programs fetched at run time. The page bundles its own, so they are never fetched.
 - **What changes:** building transactions locally (D4) removes the prepare service from the path. A runtime bug is
   caught as before: by the verifier in front of the wallet (I5) and by the validator on chain.
@@ -922,11 +931,41 @@ direct `Tx` building, gated by S3.
     its target input, its one spend redeemer and its arguments, Ctx and offered assets, its mint (a destroy's burn,
     a minting method's own tokens), its continuation and datum.
   - It checks the transaction as a whole: inputs only the wallet's and the calls' targets, withdrawals only to the
-    pinned verifiers, signers, validity, fee, collateral, balance, the wallet's outflow at most the calls' payments
-    plus the fee, and what others receive at most what the scripts release.
+    pinned verifiers, signers, validity, fee, collateral, balance, and the wallet's outflow at most the calls'
+    payments plus the fee.
+  - **What others receive** is bounded by what the scripts release (the targets less the continuations, plus the
+    mint), less the payouts and claimed sends to the wallet, plus the payments the calls take. A payment counts only
+    as the redeemer binds it: lovelace where Ctx states it (`received`), assets where `assetsIn` names them. A method
+    that is not payable is paid none, and an adoption takes none. This bound is enough because every validator settles
+    its call exactly (I3, I8, I26: continuation = target + received + accepted + mint − payouts − sends, deposits
+    moving between composed calls): the release plus the payments is what the calls owe in payouts and sends, so
+    others receive what is owed to them and nothing of the wallet's. A purchase forwarding its price to the seller
+    (ADR-0011's Market.buy) is accepted this way; so is a payment split between a seller's payout and a refund.
+  - **Claims.** Sends claimed at wallet outputs are subtracted from what others may receive, as ADR-0013 §9.2 states
+    for one call (each claim's `by` the target of a call pinning that output verifier). An output claimed in two
+    registries is refused: when the calls pin different output verifiers, each checks distinct outputs only within its
+    own redeemer, so one output would deliver two sends. A deposit claim must come from the target of a composed call
+    that declares deposits and land on the continuation of a composed call that receives them: a receiver credits
+    every deposit claimed on its continuation, whatever its `by`.
+  - **Mints** are owned per policy. A name the protocol reserves (an instance's, an owned object's, an intent's, a
+    keyed object's) is a lifecycle token: only a composed destroy's burn of its own target or an adoption's mint of
+    its own. Any other unit is a user token whose policy's one mint redeemer must be `ByAction` naming the target of
+    a composed call under that policy whose method mints; that call owns the policy's mint (`mintMatches` checks a
+    destroy's burn and mint together). Outside its continuation only a called contract's reserved-name tokens are
+    refused; its user tokens are bounded per unit like any other asset.
+  - **Left to the validators:** rules they enforce on chain that do not bound the wallet's loss (I30 for claimed
+    outputs, claim order, deposit values, a repeated or self deposit, a collection's sends covering its rewards) are
+    not repeated in the page. An honest node refuses a body that breaks them at submission; at worst a block producer
+    could include it phase-2-invalid and take the collateral, which the page bounds by `limits.maxCollateral`.
+  - An owned destroy's and a move's input datum (the object's `Holding`) must name the call's instance: a consistency
+    check of the page's own call, alone too.
+  - The known limitation of ADR-0013 §9.2 crosses calls: the wallet's top-up of any call's send to the caller counts
+    against what all the calls release to others. fixtures/m0's recorded Market.buy is refused only by it (issue
+    #170). `test/recorded.test.js` verifies every recorded call and composition of `fixtures/m3` the page takes, so an
+    over-refusal of a recorded flow fails the suite.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
-  - Spending calls only for now (no creations in a composition).
+  - Spending calls and adoptions (`@Migrate`, a creation inside a composition) compose; other creations do not.
   - **I5:** all 10 of the dApp's tamperings of a composed transaction are refused before signing.
   - **I3:** `fixtures/m3`, re-recorded, holds 69 calls (Fees' compositions included), all byte-identical on the JVM.
 - **Owned moves (ADR-0012 D3) through npm.** Guild passes on DevKit: a hero moves to another guild, which admits it
@@ -1060,7 +1099,11 @@ direct `Tx` building, gated by S3.
     - **A delegation** is one stake delegation of the script's own credential to the page's pool, with the handler's
       Cert redeemer.
     - **A collection** withdraws exactly the balance from the script's credential with the page's `Rewards` redeemer
-      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn.
+      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn
+      beyond the handler's sends claimed at wallet outputs (each claim's `by` is `RewardRef(policy)`, I37; the
+      claims are decoded and checked as ADR-0013 §9.2 states; no deposit claims). As there, the wallet's top-up of a
+      send to it below the minimum ADA counts against what others may receive of the rewards. That the sends cover
+      the rewards (I37) is the withdrawal validator's check on chain. A zero balance has no sends.
     - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
       bounded collateral and validity; signers are the wallet's and the named co-signers.
   - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward

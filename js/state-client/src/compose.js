@@ -7,11 +7,12 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, isWalletEnterprise, decodeNext,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext, integrityChecks, reservedName, heldBy, boundPayment,
   scriptBearingChecks,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
 import { KEYED_KINDS } from './keyed.js';
+import { outputRegistry, claimedSends } from './claims.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -31,6 +32,8 @@ export async function verifyComposed(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
+  // The body commits to the redeemers verified below (the calls', the claims, the approvals).
+  integrityChecks(tx, chain.params, problems);
   scriptBearingChecks(tx, wallet, problems);
 
   // Each call: its contract, a spending kind, verifiable by the page.
@@ -49,6 +52,11 @@ export async function verifyComposed(o) {
   for (const k of calls) {
     if (KEYED_KINDS.has(k.call.kind)) problems.push(`${k.call.meta.name}: a keyed call is verified on its own, never in a composition (ADR-0016 D11)`);
     else if (!SPEND_KINDS.has(k.call.kind) && !k.creation) problems.push(`${k.call.meta.name}: only spending calls and adoptions can be composed here`);
+    // An adoption holds exactly what the prior instance held (below): it takes no payment, and one stated for it would
+    // only raise what the wallet may lose.
+    if (k.creation && (k.pay.lovelace !== 0n || [...k.pay.assets].length)) problems.push(`${k.call.meta.name}: an adoption takes no payment`);
+    // A method that is not payable takes no lovelace (as client.js refuses for one call).
+    else if (k.call.meta.payable === false && k.pay.lovelace !== 0n) problems.push(`${k.call.meta.name}: it is not payable, but the page pays ${k.pay.lovelace} lovelace`);
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
@@ -108,12 +116,19 @@ export async function verifyComposed(o) {
       k.targetIndex = i;
       k.targetRef = r;
       k.targetValue = u.value;
+      k.targetDatum = u.inlineDatum ?? null;
       add(consumed, u.value);
     } else {
       problems.push(`an input that is neither the wallet's nor a call's target: ${r}`);
     }
   }
   for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
+  // A consistency check of the page's own calls: an owned destroy and a move leave no continuation under their source
+  // instance, so the object's input datum (its Holding, as the chain provider gives it) must name the call's instance.
+  for (const k of calls) {
+    if (!k.targetRef || !(k.call.kind === 'ownedDestroy' || k.call.meta.policies?.into)) continue;
+    if (heldBy(k.c, k.xj, k.call, k.targetDatum) !== k.call.instance) problems.push(`${k.call.meta.name}: the object is held by another instance than the call's`);
+  }
   // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
   // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
   for (const k of calls.filter((x) => x.creation)) {
@@ -152,6 +167,46 @@ export async function verifyComposed(o) {
   const sortedPolicies = [...mintPolicies].sort();
   for (const p of sortedPolicies) {
     if (!calls.some((k) => k.policy === p)) problems.push(`a mint under a policy no call pins: ${p}`);
+  }
+  // Mint owners, per policy (ADR-0007 D4). A unit under a called policy whose name is reserved (an instance's, an owned
+  // object's, an intent's, a keyed object's: ADR-0016) is a lifecycle token: only a composed destroy's burn of its own
+  // target (-1) or an adoption's mint of its own (+1, checked per call below). Any other unit is a user token: its
+  // policy's one mint redeemer must be ByAction naming the target of a composed call under that policy whose method
+  // mints (the policy checks the rest on chain, as for one call). That call owns the policy's user-token mint (a
+  // destroy may: it then burns its token under the same ByAction); siblings under the same policy mint nothing.
+  const keyedPolicy = (p) => calls.some((x) => x.policy === p && x.xj.keyed);
+  const reserved = (unit) => calls.some((x) => x.policy === unit.slice(0, 56)) && reservedName(unit.slice(56), keyedPolicy(unit.slice(0, 56)));
+  const mintOwner = new Map();
+  for (const [unit, q] of minted) {
+    if (!reserved(unit)) continue;
+    const k = calls.find((x) => x.targetUnit === unit);
+    if (!k || !((DESTROYS.has(k.call.kind) && q === -1n) || (k.creation && q === 1n))) problems.push(`${k ? `${k.call.meta.name}: ` : ''}a mint of ${unit}, a reserved token name`);
+  }
+  for (const p of sortedPolicies) {
+    const under = calls.filter((x) => x.policy === p && !x.creation);
+    if (!under.length || ![...minted.keys()].some((u) => u.startsWith(p) && !reserved(u))) continue;
+    const r = mints.filter((x) => sortedPolicies[x.index] === p);
+    const k0 = under[0];
+    let alt = null;
+    let by = null;
+    if (r.length === 1 && k0.rdefs.mint) {
+      try {
+        const d = k0.c.decode(k0.rdefs.mint, r[0].data);
+        alt = k0.c.resolve(k0.rdefs.mint).anyOf.find((a) => a.index === r[0].data.constr);
+        by = alt?.title === 'ByAction' ? `${d.by?.txId}#${d.by?.index}` : null;
+      } catch (e) {
+        problems.push(`the mint redeemer under ${p} does not decode: ${e.message}`);
+        continue;
+      }
+    }
+    if (!by) {
+      problems.push(`a mint under ${p} needs one ByAction redeemer`);
+      continue;
+    }
+    const owner = under.find((x) => x.targetRef === by);
+    if (!owner) problems.push(`the ByAction redeemer under ${p} names no composed call's target`);
+    else if (!owner.call.meta.returns?.mint) problems.push(`${owner.call.meta.name}: the policy's ByAction redeemer names it, but its method does not mint`);
+    else mintOwner.set(p, owner);
   }
 
   for (const k of calls) {
@@ -205,6 +260,7 @@ export async function verifyComposed(o) {
             } else if (f.title === 'ctx') {
               if (!wallet.keyHashes.includes(got.decoded.ctx.caller)) problems.push(`${call.meta.name}: the caller is not this wallet`);
               if (got.decoded.ctx.received !== k.pay.lovelace) problems.push(`${call.meta.name}: it receives ${got.decoded.ctx.received} lovelace, not the ${k.pay.lovelace} the page pays`);
+              else k.paymentBound = true;
             } else if (f.title === 'assetsIn') {
               if (!dataEqual(c.encode(f, k.pay.assets, 'assetsIn'), actual)) problems.push(`${call.meta.name}: it offers other assets than the page pays`);
             } else if (f.title === 'into') {
@@ -214,21 +270,22 @@ export async function verifyComposed(o) {
               problems.push(`${call.meta.name}: the redeemer has a field the page cannot check: ${f.title}`);
             }
           });
+          // An offer of assets binds only through the redeemer's assetsIn (the validator checks the call accepts exactly
+          // those): a method without one takes none, and an offer to it would only widen what the wallet may lose.
+          k.acceptsAssets = got.alt.fields.some((f) => f.title === 'assetsIn');
+          if (!k.acceptsAssets && [...k.pay.assets].length) {
+            problems.push(`${call.meta.name}: it takes no assets, but the page offers some`);
+          }
         }
       }
     }
-    // This call's mint: a destroy burns exactly its token; a minting method mints its policy's own tokens.
-    const ownMinted = [...minted].filter(([unit]) => unit.startsWith(k.policy));
+    // A destroy burns exactly its token: under BurnInstance, unless it owns its policy's user mint (its ByAction redeemer
+    // then covers the burn too; user tokens are checked by policy, above).
     const ownMints = mints.filter((r) => sortedPolicies[r.index] === k.policy);
     if (DESTROYS.has(call.kind)) {
       if (minted.get(k.targetUnit) !== -1n) problems.push(`${call.meta.name}: a destroy must burn exactly its token`);
       const burns = ownMints.map((r) => fields(rdefs.mint, r, 'the burn')).filter(Boolean);
-      if (!burns.some((b) => b.alt.title === 'BurnInstance')) problems.push(`${call.meta.name}: no BurnInstance redeemer`);
-    } else {
-      for (const [unit] of ownMinted) {
-        const othersBurn = calls.some((x) => x !== k && DESTROYS.has(x.call.kind) && x.targetUnit === unit);
-        if (unit === k.targetUnit || (!call.meta.returns?.mint && !othersBurn)) problems.push(`${call.meta.name}: a mint of ${unit}`);
-      }
+      if (mintOwner.get(k.policy) !== k && !burns.some((b) => b.alt.title === 'BurnInstance')) problems.push(`${call.meta.name}: no BurnInstance redeemer`);
     }
   }
 
@@ -239,14 +296,26 @@ export async function verifyComposed(o) {
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  for (const out of tx.outputs) {
+  // Each output verifier the calls pin, with its registry and the calls pinning it. The wallet outputs its claims name
+  // (each for a target spent by one of those calls; ADR-0007 D5) are the scripts' sends to the wallet, never its change.
+  const registries = [];
+  for (const k of calls) {
+    const v = k.deployment.outputVerifier;
+    if (!v?.rewardAddress || registries.some((r) => r.verifier.rewardAddress === v.rewardAddress)) continue;
+    const pinning = calls.filter((x) => x.deployment.outputVerifier?.rewardAddress === v.rewardAddress);
+    registries.push({ verifier: v, registry: outputRegistry(tx, v, problems), pinning,
+      owners: pinning.filter((x) => x.targetRef).map((x) => x.targetRef) });
+  }
+  const claimed = claimedSends(tx, registries, isWallet, problems);
+  for (const [index, out] of tx.outputs.entries()) {
     const value = out.value;
     const bech = out.address;
     const k = calls.find((x) => !DESTROYS.has(x.call.kind) && bech === x.deployment.address && value.get(x.targetUnit) === 1n);
     for (const unit of value.keys()) {
       for (const x of calls) {
-        const mintedHere = x.call.meta.returns?.mint && (minted.get(unit) ?? 0n) > 0n;
-        if (unit.startsWith(x.policy) && unit.length > 56 && unit !== k?.targetUnit && !mintedHere) {
+        // A thread token (a reserved name) of a called contract moves only as its own continuation; the contracts'
+        // user tokens are bounded per unit like any other asset.
+        if (unit.startsWith(x.policy) && unit !== k?.targetUnit && reservedName(unit.slice(56), !!x.xj.keyed)) {
           problems.push('an output carries another token of a called contract');
         }
       }
@@ -254,6 +323,7 @@ export async function verifyComposed(o) {
     if (k) {
       k.continuations++;
       k.continuation = value;
+      k.continuationIndex = index;
       const datum = out.datum;
       if (!datum) problems.push(`${k.call.meta.name}: the continuation has no inline datum`);
       else {
@@ -281,6 +351,19 @@ export async function verifyComposed(o) {
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
     report.outputs.push({ address: bech, value });
     add(third, value);
+  }
+  // Deposits (ADR-0011 D3): a receiver credits every deposit claimed on its continuation, whatever its `by`, so each must
+  // come from the target of a call that declares deposits (its validator checks its claims exactly: their number, values,
+  // memos and outputs) and land on the continuation of a call that receives them, both pinning this verifier. A deposit
+  // by a wallet input would move the wallet's own funds to the receiver. Between composed calls deposits cancel out
+  // of what the scripts release (one's release, another's intake), so the bound on others below needs no deposit value.
+  for (const { registry, pinning } of registries) {
+    for (const d of registry?.deposits ?? []) {
+      const from = pinning.find((x) => x.targetRef === d.by);
+      const into = pinning.find((x) => x.continuationIndex === d.output);
+      if (!from || !from.call.meta.returns?.deposits) problems.push(`a deposit claimed for ${d.by}, not a composed call that deposits`);
+      if (!into || !into.call.meta.policies?.receives) problems.push(`a deposit into output ${d.output}, not the continuation of a composed call that receives`);
+    }
   }
   for (const k of calls) {
     if (!DESTROYS.has(k.call.kind) && k.continuations !== 1) problems.push(`${k.call.meta.name}: not exactly one continuation`);
@@ -314,16 +397,22 @@ export async function verifyComposed(o) {
     if (unit === 'lovelace' && q > allowed) problems.push(`the wallet loses ${q} lovelace, more than the ${allowed} it pays (fee included)`);
     if (unit !== 'lovelace' && q > (offered.get(unit) ?? 0n)) problems.push(`the wallet loses ${q} of ${unit}`);
   }
-  // Others receive only what the scripts release beyond their payouts to the wallet, over all calls.
+  // Others receive only what the scripts release beyond their payouts and claimed sends to the wallet, over all calls,
+  // plus the payments the calls take as their redeemers bind them (verify.js boundPayment; an adoption takes none): the
+  // rule that protects the wallet, as in verify.js. Each validator settles its call exactly and deposits move between
+  // composed calls only, so the release plus the payments is what the calls owe in payouts and sends.
   const released = new Map();
   for (const k of calls) {
     add(released, k.targetValue);
     add(released, k.continuation, -1n);
   }
   add(released, minted);
+  const kept = new Map();
+  for (const k of calls) if (!k.creation) add(kept, boundPayment(k.pay, k.paymentBound, k.acceptsAssets));
   for (const [unit, q] of third) {
-    const free = (released.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n);
-    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them`);
+    const free = (released.get(unit) ?? 0n) + (kept.get(unit) ?? 0n) - (tagged.get(unit) ?? 0n) - (claimed.value.get(unit) ?? 0n);
+    const sends = claimed.indexes.size ? ' beyond their claimed sends to the wallet' : '';
+    if (q > (free > 0n ? free : 0n)) problems.push(`others receive ${q} of ${unit}, more than the scripts release to them${sends}`);
   }
   report.fee = fee;
   report.walletNet = net.get('lovelace') ?? 0n;
@@ -419,6 +508,10 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
       throw new Error(`${s.method} is a keyed call: a page does not compose keyed calls (ADR-0016 D11)`);
     }
     const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy', 'migrate']);
+    if (meta.kind === 'migrate' && (BigInt(s.pay?.lovelace ?? 0) !== 0n || (s.pay?.assets ?? []).length)) {
+      throw new Error(`${s.method}: an adoption takes no payment`);
+    }
+    if (meta.payable === false && BigInt(s.pay?.lovelace ?? 0) !== 0n) throw new Error(`${s.method} is not payable`);
     const args = {};
     for (const a of meta.args) {
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);
