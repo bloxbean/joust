@@ -1,7 +1,8 @@
 # ADR-0024: A dev playground — one generated UI over the dev host, offline and on DevKit
 
-**Status:** Proposed (r2: the maintainer's answers to Q1–Q7 recorded in §10; r3: what the M1–M3 implementation and its
-reviews changed, §13). Design only.
+**Status:** Accepted (2026-11-25, by the maintainer; r2: the maintainer's answers to Q1–Q7 recorded in §10; r3: what the
+M1–M4 implementation and its reviews changed, §13). Implemented by M1–M4: #174, #178, #179, #180. Follow-ups: #181–#188,
+#191.
 **Date:** 2026-11-21
 **Requested by:** issue #155 ("Generic Joust dev playground for Java/JSC, offline simulation, DevKit and CIP-30
 wallets"). §11 maps its acceptance criteria to this ADR.
@@ -468,3 +469,5 @@ when the maintainer asked for M2 to be implemented (2026-11-24, r3).
   `verifyPrepared` (I2), the review from the body; D4 → DevKit is Yaci Store only, the chain verified against the admin
   identity, settlement from the chain, wallet handoff journaled, admin-only faucet, TTL cap; §13 lists the remaining
   implementation choices (r3 notes for M3/M4: DevKit registrations, keyed calls from page identities only, scenario rules); §2 states that same-user processes are trusted like the user. Point 8 of #159 (no Gradle common bundle) is taken as accepted with the M2 go-ahead.
+- **Accepted** (2026-11-25): status changed from Proposed by the maintainer's decision, after M1 (#174) merged. No design text
+  changed.
