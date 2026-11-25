@@ -454,6 +454,24 @@ jobs:
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
             test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
 
+      # ADR-0024 M1: the offline playground of an npm project. Its server over this commit's npm dev host and a
+      # memoryLedger (sessions, the server's token/Host/Origin surface, stale builds, isolation, no network), its forms,
+      # and its page in Chromium: the Counter walkthrough in Java and .jsc. Chromium is required here, never skipped.
+      # Playwright is installed beside the repository and linked in, so js/node_modules (setup-js) is not pruned.
+      - name: Test the playground
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+        run: |
+          set -euo pipefail
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+          (cd js/joust && ../../scripts/node-test.sh joust-playground --test-concurrency=1 test/playground.test.js)
+
       # A skipped case here is a security case not run (review r2, design F16): libraries, migrate, worker-limits and
       # keyed-window skip when an engine or a fixture is missing. Every case of this job's suites must run.
       - name: No npm case skipped

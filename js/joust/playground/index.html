@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JOUST playground</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>JOUST playground</h1>
+    <div id="banner" class="banner" aria-live="polite">Starting…</div>
+  </header>
+  <main>
+    <section class="side">
+      <h2>Identities</h2>
+      <div id="identities"></div>
+      <h2>Contracts</h2>
+      <div id="contracts"></div>
+    </section>
+    <section class="center">
+      <h2 id="contract-title">Choose a contract</h2>
+      <h3>Instances</h3>
+      <div id="instances"></div>
+      <div id="objects"></div>
+      <h3>Operations</h3>
+      <div id="operations"></div>
+      <div id="review" class="review" hidden></div>
+    </section>
+    <section class="side">
+      <h2>History</h2>
+      <div id="history"></div>
+      <h2>Log</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

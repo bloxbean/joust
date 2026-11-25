@@ -628,6 +628,19 @@ jobs:
           }
           EOF
 
+      # ADR-0024 D6: @julclang/joust ships the playground page prebuilt (playground/dist), so an installed package never
+      # needs the project's Vite to serve it. Built from this commit's page sources and state-client, as CI does.
+      - name: Build the playground page
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/setup-js.sh
+          node --input-type=module -e "
+            const { buildPage } = await import('./js/joust/src/playground/page.js');
+            const files = await buildPage({ outDir: 'js/joust/playground/dist' });
+            if (!files['index.html']) throw new Error('the playground page has no index.html');
+            console.log('playground/dist:', Object.keys(files).join(' '));"
+
       # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
       # (below). Provenance attestations need a public repository: added automatically once the repository is public.
       - name: Publish the packages

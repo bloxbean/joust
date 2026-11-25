@@ -1,4 +1,5 @@
-// Differential intersection of the page verifier and protocol 1. The page API has no publication or host-claim input.
+// Differential intersection of the page verifier and protocol 1 for calls. Publications go through verifyPublication
+// (host-publication.test.js); verifyPrepared has no host-claim input.
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';

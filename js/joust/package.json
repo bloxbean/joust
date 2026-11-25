@@ -17,7 +17,8 @@
   "files": [
     "bin",
     "src",
-    "engine"
+    "engine",
+    "playground"
   ],
   "dependencies": {
     "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
