@@ -284,7 +284,11 @@ final class Scaffold {
      * {@code --workspaces=false}: an ancestor package.json whose workspaces include tmp must not become the prefix.
      */
     static List<String> packCommand(Path node, Path npm, String spec) {
-        List<String> args = List.of("pack", "--workspaces=false", "--loglevel=warn", spec);
+        return npmCommand(node, npm, List.of("pack", "--workspaces=false", "--loglevel=warn", spec));
+    }
+
+    /** npm with {@code args}, run as {@link #packCommand} runs it (its JavaScript entry point by our node when it is one). */
+    static List<String> npmCommand(Path node, Path npm, List<String> args) {
         List<String> cmd = new ArrayList<>();
         Path js = null;
         try {

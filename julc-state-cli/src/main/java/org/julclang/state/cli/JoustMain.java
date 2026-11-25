@@ -35,6 +35,7 @@ public final class JoustMain {
         COMMANDS.put("deploy", "deploy      npm: publish the reference scripts to a network (--network <name>)");
         COMMANDS.put("dev", "dev         npm: attach to a network, build, deploy, rebuild on save, serve the page");
         COMMANDS.put("serve", "serve       npm: serve a built page with the chain API proxied");
+        COMMANDS.put("playground", "playground  a browser playground, offline: npm and Gradle (Gradle: Node.js 22+, ./gradlew build joustHostSpec)");
         COMMANDS.put("version", "version     this joust's version, and the npm project's @julclang/joust");
         COMMANDS.put("help", "help [cmd]  this help");
     }
@@ -116,7 +117,8 @@ public final class JoustMain {
         out.println();
         out.println("In an npm project, every command but new, version and help goes to the project's own");
         out.println("@julclang/joust (node_modules), so it does exactly what npm run would. In a Gradle build, build, test");
-        out.println("and run go to its ./gradlew. https://github.com/bloxbean/joust");
+        out.println("and run go to its ./gradlew; playground runs this joust's own @julclang/joust (installed once into");
+        out.println("~/.joust/playground/<version>) over the build. https://github.com/bloxbean/joust");
         return 0;
     }
 
@@ -254,12 +256,15 @@ public final class JoustMain {
     /** D4.3: the build's own wrapper, from the working directory (a subproject's directory selects it). */
     int gradle(Path buildDir, List<String> args) {
         String cmd = args.get(0);
+        // ADR-0024 D3, Q1: the playground server of this joust's own version, from the per-user cache, in the project
+        // directory (it runs ./gradlew build joustHostSpec itself).
+        if (cmd.equals("playground")) return new Playground(sys, versions).run(buildDir, args.subList(1, args.size()));
         if (!List.of("build", "test", "run").contains(cmd)) {
             if (List.of("deploy", "dev", "serve").contains(cmd)) {
                 sys.err().println("joust: '" + cmd + "' is a command of npm projects (the npm joust). In a Gradle"
                         + " project, deploy from Java: ./gradlew run runs the DevKit demo (CounterMain).");
             } else {
-                sys.err().println("joust: in a Gradle build, the native joust runs build, test and run (./gradlew"
+                sys.err().println("joust: in a Gradle build, the native joust runs build, test, run and playground (./gradlew"
                         + " <task> otherwise). See joust help.");
             }
             return USAGE;

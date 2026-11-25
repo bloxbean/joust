@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { memoryLedger, LedgerRefusal } from '../test/offline.js';
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
-import { HostError, launchNpmHost, npmFingerprint } from './host.js';
+import { HostError, launchNpmHost, npmSource } from './host.js';
 
 export const OFFLINE_NETWORK = { networkId: 0, protocolMagic: 42, mainnet: false };
 const TIME = { maxTtlSlots: 900, settlementSlots: 0, maxNowAheadSlots: 900 };
@@ -94,24 +94,33 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
 }
 
 /**
- * Starts an offline session for the npm project at {@code root} (its build must exist: build/joust/contracts.json).
+ * Starts an offline session for the project at {@code root}: an npm project (its build must exist:
+ * build/joust/contracts.json) or, with {@code source} a gradleSource (gradle.js), a Gradle project's verified snapshot.
  *
  * @param o.engine   the runtime engine (loadEngine()), for the ledger's script evaluation
+ * @param o.source   the build the session pins (default npmSource(root)): its digest, contract entries and host
  * @param o.ledger   keep this ledger (a new session on a rebuilt project, D2); default a new one
  * @param o.attacks  run the attack suite on every script transaction (default true, Q7)
  */
-export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {} }) {
-  const fp = npmFingerprint(root);
-  const entries = JSON.parse(fp.contracts.toString('utf8'));
+export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {},
+  source = npmSource(root, { launch }) }) {
+  const fp = await source.open();
+  const entries = fp.entries;
   const chain = ledger ?? memoryLedger({ engine, attacks });
   const read = ledgerReads(chain);
-  const host = launch({ root: fp.root, onExit: (reason) => onEnd(reason) });
+  let host;
+  try {
+    host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });
+  } catch (e) {
+    fp.dispose();
+    throw e;
+  }
   const reservations = new Map();   // reservation id -> { txHash, validTo, kind }
   const submitted = [];             // { txHash, slot, attacks }
   let init;
   try {
     init = await host.call('initialize', { protocol: [1], network: OFFLINE_NETWORK, clock: chain.clock, time: TIME,
-      limits: LIMITS, build: { snapshot: fp.root, digest: fp.digest }, restoring: false });
+      limits: LIMITS, build: { snapshot: fp.snapshot, digest: fp.digest }, restoring: false });
   } catch (e) {
     await host.close().catch(() => {});
     throw e;
@@ -126,13 +135,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     if (!host.alive) throw new StageError('session', 'hostEnded', `the dev host ended (${host.ended}): start a new session`);
   };
   /** Whether the project's build changed since this session started (I6). */
-  const stale = () => {
-    try {
-      return npmFingerprint(fp.root).digest !== fp.digest;
-    } catch {
-      return true;
-    }
-  };
+  const stale = () => fp.stale();
   const forward = async (method, params) => {
     live();
     try {
@@ -149,6 +152,8 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
   return {
     id,
     mode: 'offline',
+    build: fp.kind,
+    snapshot: fp.snapshot,
     root: fp.root,
     fingerprint: fp.digest,
     entries,

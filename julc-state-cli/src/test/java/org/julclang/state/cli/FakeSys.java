@@ -32,6 +32,8 @@ final class FakeSys implements Sys {
     /** Real execution, with stdin from and stdout/stderr to these files (I2 fidelity tests). */
     File realIn, realOut, realErr;
     String javaVersionOutput = "openjdk version \"25.0.1\" 2025-10-21";
+    /** What {@code node --version} prints (empty: it cannot run). */
+    String nodeVersionOutput = "v22.11.0\n";
 
     FakeSys(Path cwd) {
         this.cwd = cwd;
@@ -96,6 +98,9 @@ final class FakeSys implements Sys {
 
     @Override
     public Optional<String> capture(List<String> command, Map<String, String> env, int seconds) {
+        if (command.size() == 2 && command.get(0).endsWith("node") && command.get(1).equals("--version")) {
+            return Optional.ofNullable(nodeVersionOutput);
+        }
         return Optional.ofNullable(javaVersionOutput);
     }
 }

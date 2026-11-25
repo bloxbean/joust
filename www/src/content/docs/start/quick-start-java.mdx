@@ -555,6 +555,26 @@ public class CounterMain {
 ./gradlew run
 ```
 
+## Try it in the playground
+
+```sh
+joust playground                  # ./gradlew build joustHostSpec, then a browser page for every contract, offline
+```
+
+`joust playground` ([ADR-0024](/project/architecture-decisions/)) opens a generated page for every contract of the
+project: test identities (Alice, Bob, Carol) whose keys stay in the page, a form for each call, the state and named
+views, an in-memory ledger that checks the node's phase-1 rules it models and runs the scripts with JuLC's VM, and the
+attack suite on every script transaction. Every transaction is checked by the page and shown for review before an
+identity signs it. It needs **Node.js 22+**: the native `joust` installs the `@julclang/joust` of its own version once
+into `~/.joust/playground/<version>` and runs the playground from there, never from the project. The build runs through
+your wrapper with its gates (`checkJscAbi`, the lock check); accept an intended change with `./gradlew acceptJscAbi`.
+The dev host runs a private, verified copy of the build: after a rebuild, start a new session in the page to use it.
+The playground refuses a build that other accounts could change: the project's directories up to its `settings.gradle`,
+that file and `gradlew` must be yours and not group- or world-writable. On a system whose umask is `002` (where
+`joust new` or `git clone` leaves them `775`/`664`), it names every such path and the one command that fixes them
+(`chmod go-w <paths>`); or list the build's directory in `JOUST_SAFE_DIRS` if you share it on purpose.
+Offline success is not a node's acceptance; DevKit mode comes later.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |

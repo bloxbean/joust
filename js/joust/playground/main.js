@@ -360,6 +360,56 @@ function drawOperations() {
     if (bad.length) card.append(h('span', { class: 'badge', text: 'UNSUPPORTED argument types: ' + bad.map((u) => u.path).join(', ') }));
     if (NEEDS_INSTANCE.has(call.kind) && !state.instance) card.append(h('span', { class: 'muted', text: ' choose an instance first' }));
   }
+  drawViews();
+}
+
+// ---- named views (D6.2): run by the host when it advertises capability `views` (the JVM host of a Gradle project);
+// the npm host serves state only, and the page says so. A view signs nothing.
+function drawViews() {
+  const box = $('views');
+  const c = state.contract;
+  const views = (c?.describe.calls ?? []).filter((call) => call.kind === 'view');
+  if (!views.length) return box.replaceChildren();
+  if (!(state.session.capabilities ?? []).includes('views')) {
+    return box.replaceChildren(h('h4', { text: 'Views' }), h('p', { class: 'muted', id: 'views-unavailable',
+      text: 'Named views are not available on this project\'s dev host (the npm host serves the state only; the JVM host of a Gradle project runs them).' }));
+  }
+  const cards = views.map((call) => {
+    const meta = (c.description['x-joust']?.views ?? []).find((v) => v.name === call.method) ?? null;
+    const card = h('div', { class: 'operation view' + (call.served && meta ? '' : ' disabled'), 'data-view': call.method },
+      h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: 'view' })));
+    if (!call.served || !meta) {
+      card.append(h('span', { class: 'badge', text: `unsupported: ${call.unsupported ?? 'not in the description'}` }));
+      return card;
+    }
+    const defs = c.description.definitions;
+    const controls = (meta.args ?? []).map((a) => ({ name: a.name, control: classify(a.schema, defs, 'args.' + a.name) }));
+    const bad = controls.flatMap((x) => unsupportedPaths(x.control));
+    const form = h('div', { class: 'form' });
+    const getters = controls.map((x) => [x.name, render(x.control, form, { keyHashes: state.identities }, x.name)]);
+    const result = h('pre', { class: 'view-result' });
+    const go = h('button', { class: 'run-view', text: 'Run view', disabled: bad.length > 0 || !state.instance,
+      onclick: () => guard(async () => {
+        let args;
+        try {
+          args = {};
+          for (const [i, [name, get]] of getters.entries()) args[name] = encode(controls[i].control, get());
+        } catch (e) {
+          throw new StageFailure({ stage: 'arguments', code: 'form', message: e.message, label: `view ${call.method}` });
+        }
+        try {
+          const r = await sapi('view', { contract: c.name, instance: state.instance, view: call.method, args });
+          result.textContent = show(r.value);
+        } catch (e) {
+          throw labelled(e, 'host', `view ${call.method}`);
+        }
+      }) });
+    card.append(form, go, result);
+    if (bad.length) card.append(h('span', { class: 'badge', text: 'UNSUPPORTED argument types: ' + bad.map((u) => u.path).join(', ') }));
+    if (!state.instance) card.append(h('span', { class: 'muted', text: ' choose an instance first' }));
+    return card;
+  });
+  box.replaceChildren(h('h4', { text: 'Views' }), ...cards);
 }
 
 // ---- a call, end to end (D7)
