@@ -76,6 +76,44 @@ const CONTRACT = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
  * @returns { pairingPath() (the base with a fresh single-use code in its fragment), token (in memory, for tests),
  *   sessions, handles(pathname), handle(req, res), close() }
  */
+/**
+ * The verifiers' scripts (double-wrapped cborHex) of the runtime engine the server loaded, when the files that engine
+ * was loaded from (its identity, bound at load: joust-runtime's engineFilesOf) are the session's fingerprinted ones
+ * ({@code pinned}); {} otherwise, or if none is at hand. Never compared with the files on disk now: those may have
+ * changed (an upgrade) while the loaded engine still answers with the old scripts.
+ */
+async function engineVerifiers(engine, pinned, log = () => {}) {
+  let rt;
+  try {
+    rt = await import('@julclang/joust-runtime');
+  } catch {
+    return {};
+  }
+  let e = engine;
+  if (!e) {
+    try {
+      e = await rt.loadEngine();
+    } catch {
+      return {};
+    }
+  }
+  const loaded = rt.engineFilesOf?.(e) ?? null;
+  if (!pinned || !loaded || Object.keys(pinned).some((f) => pinned[f] !== loaded[f])) {
+    log('playground: the loaded runtime engine is not the one this session\'s build pins: no shared verifiers (sends and maps are refused)');
+    return {};
+  }
+  const out = {};
+  for (const [key, validator] of [['outputVerifier', 'OutputVerifier'], ['mapVerifier', 'MapVerifier']]) {
+    try {
+      const r = await e.joust.validatorScript({ validator });
+      if (r?.ok && typeof r.cborHex === 'string' && /^(?:[0-9a-f]{2})+$/.test(r.cborHex)) out[key] = r.cborHex;
+    } catch {
+      // absent: calls that need it are refused by the page's checks
+    }
+  }
+  return out;
+}
+
 export function playgroundHandler({ root, engine, page, attacks = true, log = () => {}, mode = 'offline', devkit = {}, base = '/',
   session: makeSession = mode === 'devkit' ? devkitSession : offlineSession, source, pairTtlMs = PAIR_TTL_MS, onPaired = () => {} } = {}) {
   if (!['offline', 'devkit'].includes(mode)) throw new Error(`playground: no mode ${mode}`);
@@ -128,7 +166,7 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     lifecycle = run.catch(() => {});
     return run;
   };
-  async function create({ keepLedgerOf, attacks: a = attacks } = {}) {
+  async function create({ keepLedgerOf, attacks: a = attacks, clock = null } = {}) {
     if (closed) throw new StageError('session', 'closed', 'the playground is stopping');
     if (mode === 'devkit') {
       // One DevKit session per server: its journal is the project's on this chain (journal.js), so the previous
@@ -159,7 +197,14 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
     const id = 's' + ++counter;
     let s;
     try {
-      s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}),
+      // An offline ledger's clock (a scenario's): an origin in ms and a slot length, both bounded.
+      const c = clock === null || clock === undefined ? null : {
+        zeroTimeMs: Number(clock.zeroTimeMs), slotLengthMs: Number(clock.slotLengthMs) };
+      if (c && !(Number.isSafeInteger(c.zeroTimeMs) && c.zeroTimeMs >= 0 && Number.isSafeInteger(c.slotLengthMs) && c.slotLengthMs >= 1
+        && c.slotLengthMs <= 3_600_000) || (c && (prior || mode === 'devkit'))) {
+        throw new StageError('request', 'clock', 'a clock is { zeroTimeMs, slotLengthMs }, for a new offline ledger only');
+      }
+      s = await makeSession({ id, root, engine, ledger: prior?.ledger, attacks: !!a, ...(source ? { source } : {}), ...(c ? { clock: c } : {}),
         onEnd: (reason) => log(`session ${id}: the dev host ended (${reason})`) });
     } catch (e) {
       if (prior) sessions.set(prior.id, prior);
@@ -203,7 +248,11 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       if (!entry) throw new StageError('request', 'contract', 'no such contract in this build');
       // The page's anchors come from the build this session pinned (the bytes the fingerprint covers), never from
       // the host (ADR-0022 D13 rule 2): its description and script.
-      return { describe: await s.describe(contract), description: JSON.parse(entry.description), script: entry.script };
+      // The shared verifiers likewise (sends, maps): a Gradle build's from its snapshot's julc-state-verifier entry; an
+      // npm build's from the server's loaded runtime engine, only when its files are the ones the session's fingerprint
+      // covers (else none: the page refuses the calls that need them).
+      return { describe: await s.describe(contract), description: JSON.parse(entry.description), script: entry.script,
+        verifiers: s.verifiers ?? await engineVerifiers(engine, s.engineFiles, log) };
     },
     'deployment': async (b) => use(b.session).deployment(str(b.contract, 'contract', CONTRACT)),
     'prerequisites': async (b) => use(b.session).prerequisites(str(b.contract, 'contract', CONTRACT)),
@@ -238,6 +287,24 @@ export function playgroundHandler({ root, engine, page, attacks = true, log = ()
       str(String(b.lovelace ?? ''), 'lovelace', /^\d{1,16}$/)) }),
     'advance': async (b) => ({ slot: use(b.session).advance(b.ms) }),
     'history': async (b) => use(b.session).history(),
+    // Keyed operations (ADR-0016 M3): whether a recorded attempt is on the chain, and the tip it was asked at.
+    'landed': async (b) => {
+      const s = use(b.session);
+      const txHash = str(b.txHash, 'txHash', /^[0-9a-f]{64}$/);
+      return s.landed(txHash);
+    },
+    // Keyed operation records (ADR-0016 M3): the server keeps them (DevKit: in the chain's journal; offline: in the
+    // session), so a reload, another tab or a restart of the command sees them; each change is one atomic step.
+    'operations': async (b) => {
+      const s = use(b.session);
+      try {
+        return b.step === undefined ? s.operations() : { record: s.operate(b.step) };
+      } catch (e) {
+        if (e.code === 'operation') throw new StageError('journal', 'operation', e.message);
+        // An unreadable or foreign file (fails closed, kept as it is) or a write that did not commit.
+        throw new StageError('journal', 'storage', e.code === 'storage' ? e.message : `the keyed operation journal could not be written: ${e.message}`);
+      }
+    },
     // DevKit (D7 step 7): a submitted body's settlement as the session observed it (submitted, included, final, …).
     'tx': async (b) => {
       const s = use(b.session);

@@ -452,12 +452,13 @@ jobs:
             test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \
             test/write-regular.test.js)
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
-            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
+            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js test/mpf.test.js)
 
       # ADR-0024 M1: the offline playground of an npm project. Its server over this commit's npm dev host and a
       # memoryLedger (sessions, the server's token/Host/Origin surface, stale builds, isolation, no network), its forms,
       # and its page in Chromium: the Counter walkthrough in Java and .jsc. Chromium is required here, never skipped.
       # M3 without a DevKit: DevKit sessions over a chain the test holds back or refuses (settlement, the journal, I4).
+      # M4: maps, sends, @Quorum co-signing, keyed calls and scenarios, checked as the page checks them and in Chromium.
       # Playwright is installed beside the repository and linked in, so js/node_modules (setup-js) is not pruned.
       - name: Test the playground
         shell: bash
@@ -472,7 +473,7 @@ jobs:
           ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
           ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
           (cd js/joust && ../../scripts/node-test.sh joust-playground --test-concurrency=1 test/playground.test.js \
-            test/playground-devkit.test.js)
+            test/playground-devkit.test.js test/playground-m4.test.js)
 
       # A skipped case here is a security case not run (review r2, design F16): libraries, migrate, worker-limits and
       # keyed-window skip when an engine or a fixture is missing. Every case of this job's suites must run.

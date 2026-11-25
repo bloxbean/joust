@@ -1,12 +1,18 @@
 package org.julclang.state.runtime.wasm;
 
 import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ExUnits;
+import com.bloxbean.cardano.client.plutus.spec.Redeemer;
+import com.bloxbean.cardano.client.plutus.spec.RedeemerTag;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
+import com.bloxbean.cardano.client.transaction.spec.TransactionBody;
+import com.bloxbean.cardano.client.transaction.spec.TransactionWitnessSet;
 import com.bloxbean.cardano.client.util.HexUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.state.examples.devkit.Fixtures;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -75,6 +81,32 @@ class OfflineTest {
         }
         var none = Offline.evaluate(new Offline.EvaluateRequest(any.get("unsignedTx").asText(), "{}", zeroSlot, zeroTime, slot));
         assertFalse(none.ok());
+    }
+
+    // ---- range attacks: on every transaction with both bounds, unless the caller says the window is bookkeeping
+
+    /** A body with the window [100, 160) (slots) and a redeemer without Ctx. */
+    static Transaction windowed(boolean start) {
+        var body = TransactionBody.builder().inputs(new ArrayList<>()).outputs(new ArrayList<>())
+                .fee(BigInteger.valueOf(200_000)).ttl(160).validityStartInterval(start ? 100 : 0).build();
+        var ws = new TransactionWitnessSet();
+        ws.setRedeemers(new ArrayList<>(List.of(Redeemer.builder().tag(RedeemerTag.Spend).index(BigInteger.ZERO).data(BigIntPlutusData.of(1))
+                .exUnits(ExUnits.builder().mem(BigInteger.ONE).steps(BigInteger.ONE).build()).build())));
+        return Transaction.builder().body(body).witnessSet(ws).build();
+    }
+
+    @Test
+    void bothBounds_areAttacked_evenWithoutCtx() {
+        // A @ValidAfter/@ValidBefore method without Ctx reads tx.validRange directly: its redeemer carries no window, and
+        // its bounds are attacked all the same (review M4-D1).
+        assertTrue(Offline.rangeAttacked(windowed(true), false));
+        assertFalse(Offline.rangeAttacked(windowed(false), false), "a TTL only: no script reads a window");
+    }
+
+    @Test
+    void theCallersUntimedHint_skipsTheRangeAttacks() {
+        // A keyed action or retire whose method reads no time: its attempt's window is bookkeeping (Registry's change).
+        assertFalse(Offline.rangeAttacked(windowed(true), true));
     }
 
     /** Review r2 (#82 S5): only a script's refusal counts as refused; an evaluator or suite error does not. */

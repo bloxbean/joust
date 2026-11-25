@@ -18,6 +18,37 @@ import { LIMITS, StageError, snapshotOutput } from './session.js';
 import { openJournal, RESERVATION, stateRoot } from './journal.js';
 
 /** Slots after inclusion before a DevKit transaction counts as final (a single-node devnet does not fork). */
+
+const KEYED_MAX_START = 60;
+const KEYED_KINDS = new Set(['keyedInit', 'keyedAction', 'keyedRemove', 'keyedRetire']);
+
+/** Whether a call is keyed, read from the pinned build's description (a keyed kind, or a keyed contract's creation). */
+export function keyedCall(entries, call) {
+  if (KEYED_KINDS.has(call?.kind)) return true;
+  if (call?.kind !== 'init') return false;
+  const entry = entries.find((e) => JSON.parse(e.description).preamble?.title === call.contract);
+  const k = entry ? JSON.parse(entry.description)['x-joust']?.keyed : null;
+  return Array.isArray(k) ? k.length > 0 : !!k && Object.keys(k).length > 0;
+}
+
+/**
+ * What is wrong with a body's validity window for the request that asked for it, or null. A plain call: an upper bound
+ * in (now, now + ttl]. A keyed call with page limits [maxStart, maxValidity] (protocol 1, ADR-0016): a start in
+ * [now, now + maxStart], an end after it and at most start + ttl and now + maxValidity, so a cooldown that ends inside
+ * the allowed future window is a valid body, not a lie.
+ */
+export function windowProblem({ validFrom, validTo, now, ttl, keyed = null }) {
+  if (validTo === null) return 'no upper validity bound';
+  if (validFrom !== null && validFrom >= validTo) return 'an empty validity window';
+  if (!keyed) return validTo <= now || validTo > now + ttl ? `a validity bound ${validTo} outside the asked window (${now}, ${now + ttl}]` : null;
+  const [maxStart, maxValidity] = keyed;
+  if (validFrom === null || validFrom < now || validFrom > now + maxStart) return `a keyed start ${validFrom} outside [${now}, ${now + maxStart}]`;
+  if (validTo > validFrom + ttl || validTo > now + maxValidity) {
+    return `a keyed validity bound ${validTo} outside the asked window (${validFrom}, ${Math.min(validFrom + ttl, now + maxValidity)}]`;
+  }
+  return null;
+}
+
 export const SETTLEMENT_SLOTS = 10;
 /** The validity window the playground asks for on DevKit: long enough for a person to review and a wallet to sign. */
 export const DEFAULT_TTL_MS = 60_000;
@@ -289,6 +320,10 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
   const window = identity.stabilityWindow ?? 300;
   ttlSlots = Math.min(ttlSlots ?? Math.max(1, Math.ceil(DEFAULT_TTL_MS / clock.slotLengthMs)), window);
   nowSlot ??= () => clock.zeroSlot + Math.floor((Date.now() - clock.zeroTimeMs) / clock.slotLengthMs);
+  // A keyed call's window (ADR-0016 D11; protocol 1 pageLimits) may start ahead, within maxStartSlots, and end at most
+  // ttlSlots after its start: the page sends these limits, and its end limit keeps every body inside the stability
+  // window (D-3).
+  const keyedLimits = [Math.min(KEYED_MAX_START, Math.max(0, window - ttlSlots)), Math.min(window, ttlSlots + KEYED_MAX_START)];
   // The admin API's faucet only: never a payment the server signs (it could spend an identity's outputs, #179 P1-8).
   topUp ??= async (address, ada) => {
     const { devkitTopUp } = await import('@julclang/joust-runtime');
@@ -712,7 +747,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     const cancel = () => { clearTimeout(timer); waits.delete(cancel); no(new StageError('session', 'closed', 'the session ended')); };
     waits.add(cancel);
   });
-  const handOut = async (prepared, label, { now: n, ttl }) => {
+  const handOut = async (prepared, label, { now: n, ttl, keyed = null }) => {
     const tx = (() => {
       try {
         return parseTx(prepared?.cbor);
@@ -731,10 +766,9 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         : typeof reservation !== 'string' || !RESERVATION.test(reservation) ? 'no valid reservation'
           : journal.find(reservation) ? 'a reservation already journaled'
             // #179 r2: the window the request asked for, decoded from the body, before anything is written.
-            : validTo === null ? 'no upper validity bound'
-              : validTo <= n || validTo > n + ttl ? `a validity bound ${validTo} outside the asked window (${n}, ${n + ttl}]`
-                : validFrom !== null && validFrom >= validTo ? 'an empty validity window'
-                  : held.some((e) => e.txHash === tx.hash) ? 'the body of a reservation already journaled' : null;
+            // A keyed call's window may start ahead within its page limits (windowProblem, ADR-0016).
+            : windowProblem({ validFrom, validTo, now: n, ttl, keyed })
+              ?? (held.some((e) => e.txHash === tx.hash) ? 'the body of a reservation already journaled' : null);
     };
     const refuse = (problem) => {
       fence(`it gave a body with ${problem}`);
@@ -755,8 +789,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
           // no tip: the reservation expires with its window
         }
       }
+      // When it is released (Fable FM2): an included body after its settlement margin, else after its window and margin.
+      const until = Number.isSafeInteger(e.slot) ? e.slot + settlementSlots : Number.isSafeInteger(e.validTo) ? e.validTo + settlementSlots : null;
       return new StageError('host', 'pending', `the body spends an input or collateral the journaled body `
-        + `${e.txHash.slice(0, 16)}… still reserves: prepare again once it settles`);
+        + `${e.txHash.slice(0, 16)}… still reserves: ${until === null ? 'prepare again once it settles' : `try again after slot ${until}`}`,
+      { retryAtSlot: until });
     };
     const first = problemOf();
     if (first) throw refuse(first);
@@ -831,6 +868,8 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     root: fp.root,
     fingerprint: fp.digest,
     entries,
+    verifiers: fp.verifiers ?? null,
+    engineFiles: fp.engineFiles ?? null,
     host,
     init,
     stale,
@@ -859,7 +898,7 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
       }
       return { session: id, mode: 'devkit', network: { ...network, name: net.name ?? 'devkit' },
         chain: { startTime: identity.startTime, admin: identity.admin }, fingerprint: fp.digest, slot: now(), tip: tip?.slot ?? null,
-        clock, ttlSlots, settlementSlots, identityBase, stale: stale(), ended: this.ended, fenced, fencedUntil: fencedUntil(), attacks: false,
+        clock, ttlSlots, keyedLimits, settlementSlots, identityBase, stale: stale(), ended: this.ended, fenced, fencedUntil: fencedUntil(), attacks: false,
         capabilities: init.capabilities ?? [], versions: init.versions ?? null, restored, pruned: shown,
         contracts: (init.contracts ?? []).map((c) => ({ name: c.name, served: c.served === true, unsupported: c.unsupported ?? null })) };
     },
@@ -882,8 +921,18 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
     async prepare(call) {
       guardBuild();
       const n = now();
+      // A keyed call (from the pinned description) carries the page's window limits, never beyond this DevKit's.
+      const keyed = keyedCall(entries, call);
+      if (keyed) {
+        const pl = call.pageLimits ?? keyedLimits;
+        if (!Array.isArray(pl) || pl.length !== 2 || !pl.every(Number.isSafeInteger) || pl[0] < 0 || pl[0] > keyedLimits[0]
+          || pl[1] < 1 || pl[1] > keyedLimits[1]) {
+          throw new StageError('request', 'pageLimits', `a keyed call's pageLimits are at most [${keyedLimits.join(', ')}] on this DevKit`);
+        }
+        call = { ...call, pageLimits: pl };
+      }
       const r = await forward('prepare', { now: n, ttlSlots, call });
-      await handOut(r?.prepared, `${call.method}`, { now: n, ttl: ttlSlots });
+      await handOut(r?.prepared, `${call.method}`, { now: n, ttl: ttlSlots, keyed: keyed ? call.pageLimits : null });
       return { ...r, now: n, ttlSlots };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: now(), contract, instance, view, args }),
@@ -1029,13 +1078,37 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         // host is told, with the refusal as evidence, and the page lists the prerequisites again (final pass FE1).
         if (/StakeKeyRegistered|already registered|StakeKeyAlreadyRegistered/i.test(message) && /^publish (?:stakeRegistration|verifier):/.test(e.label ?? '')) {
           await learnRegistration(e, { message: message.slice(0, 500) });
-          throw new StageError('ledger', 'alreadyRegistered', `already registered: ${message}`, { note: 'the prerequisites are listed again' });
+          // Its inputs stay reserved until the body's window and the settlement margin pass (Fable FM1: say when).
+          const until = Number.isSafeInteger(e.validTo) ? e.validTo + settlementSlots : null;
+          throw new StageError('ledger', 'alreadyRegistered', `already registered: ${message}`
+            + (until === null ? '' : ` (its inputs are released after slot ${until})`), { note: 'the prerequisites are listed again', retryAtSlot: until });
         }
         throw new StageError('ledger', 'nodeRefused', message, { note: 'its inputs stay reserved until the body expires' });
       }
       observed(hash, { transport: 'accepted' });
       return { ...out, transport: 'accepted' };
     }),
+    /**
+     * Whether a transaction is on the chain (by its slot, from the trusted provider), and the chain tip read after the
+     * lookup: keyed operations reconcile their attempts with this observation (null tip: not known).
+     */
+    async landed(txHash) {
+      // At one stable chain point, as the settlement watcher reads (observeOne): a chain point that moved during the
+      // lookup is no observation, and the attempt stays pending (tip null).
+      let o = null;
+      try {
+        o = await observeOne({ txHash });
+      } catch {
+        o = null;
+      }
+      if (!o) return { landed: false, final: false, slot: null, tip: null };
+      const included = o.slot !== null && o.slot !== undefined;
+      // Final strictly past the settlement margin, as the watcher's rule: a shallow inclusion may still roll back.
+      return { landed: included, final: included && o.tip > o.slot + settlementSlots, slot: included ? o.slot : null, tip: o.tip };
+    },
+    /** The page's keyed operation records, kept in this chain's journal (operations.js). */
+    operations: () => journal.operations,
+    operate: (step) => journal.operate(step),
     /** A body's settlement as the chain shows it (I7), with the submission's transport outcome beside it. */
     txStatus(txHash) {
       const s = status.get(txHash);
@@ -1085,7 +1158,11 @@ export async function devkitSession({ id, root, net, identity, chain, state = st
         const before = sum(await chain.utxos(address));
         if (before >= TOPUP_BELOW) return { toppedUp: false };
         try {
-          await topUp(address, Number(q / ADA));
+          // Two outputs (two top-ups), so a body that still reserves one (a refusal, an expiring attempt) does not lock
+          // the identity out of its next call until that one is released (Fable FM1).
+          const half = q / ADA / 2n;
+          if (half > 0n) await topUp(address, Number(half));
+          await topUp(address, Number(q / ADA - half));
         } catch (err) {
           throw new StageError('session', 'faucet', `the DevKit faucet did not pay: ${err.message ?? err}`);
         }

@@ -1,10 +1,8 @@
 // verifyHostResult (src/hostcheck.js), the dev-host client's pre-sign check, against every vector of the protocol's
 // verifier fixtures (fixtures/host/verifier, decided by the conformance kit's ReferenceChecker): the same problem codes
-// for each, positive and negative, prepare and publish (ADR-0024 I2).
-//
-// One category is decided differently on purpose: a call on a contract state or owned value with a MerkleMap field.
-// The reference verifies its map claims' proofs; verifyHostResult does not, so it refuses every such call as
-// notVerifiable (fail closed). The playground offers no map calls (they arrive with ADR-0024 M4).
+// for each, positive and negative, prepare and publish (ADR-0024 I2). The claim is agreement on these vectors' problem
+// codes (not on each check site, nor beyond the vectors). Map calls are among them: their claims and MPF proofs are
+// checked by the reference's rules (ADR-0024 M4).
 
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -29,30 +27,25 @@ function mapCall(v) {
 }
 
 const files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
-const counts = { agree: 0, maps: 0, positive: 0, negative: 0 };
+const counts = { maps: 0, positive: 0, negative: 0 };
 
 for (const file of files) {
   const v = JSON.parse(readFileSync(new URL(file, dir)));
   const maps = mapCall(v);
-  test(`${maps ? 'map call refused' : 'reference agreement'} on ${file}`, () => {
+  test(`reference agreement on ${file}${maps ? ' (a map call)' : ''}`, () => {
     const { problems, sites } = verifyHostResult(v);
     const got = [...new Set(problems)].sort();
-    if (maps) {
-      counts.maps++;
-      assert.deepEqual(got, ['notVerifiable'], sites.join('; '));
-      return;
-    }
-    counts.agree++;
+    if (maps) counts.maps++;
     counts[v.violations.length ? 'negative' : 'positive']++;
     assert.deepEqual(got, [...new Set(v.violations)].sort(), sites.join('; '));
   });
 }
 
-test('every vector was decided (none skipped)', () => {
-  assert.equal(counts.agree + counts.maps, files.length);
+test('every vector was decided as the reference decides it (none skipped, none excluded)', () => {
+  assert.equal(counts.positive + counts.negative, files.length);
   assert.ok(files.length >= 333, `${files.length} vectors`);
-  assert.equal(counts.maps, 31, 'the map calls refused as notVerifiable');
-  assert.ok(counts.positive >= 46 && counts.negative >= 250, JSON.stringify(counts));
+  assert.equal(counts.maps, 31, 'the map calls are among them');
+  assert.ok(counts.positive >= 60 && counts.negative >= 270, JSON.stringify(counts));
 });
 
 test('a body the checker cannot read is malformed, never accepted', () => {

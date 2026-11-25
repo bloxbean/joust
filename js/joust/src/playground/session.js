@@ -8,6 +8,14 @@
 
 import { createHash } from 'node:crypto';
 import { memoryLedger, LedgerRefusal } from '../test/offline.js';
+import { memoryOperations } from './operations.js';
+
+const opsByLedger = new WeakMap();
+/** The keyed operation records of an offline ledger (one store per ledger, whichever session runs on it). */
+function ledgerOperations(ledger) {
+  if (!opsByLedger.has(ledger)) opsByLedger.set(ledger, memoryOperations());
+  return opsByLedger.get(ledger);
+}
 import { addressParts, ledgerTx, rewardAddress } from '@julclang/state-client/ledger';
 import { HostError, launchNpmHost, npmSource } from './host.js';
 
@@ -103,11 +111,16 @@ export function ledgerReads(ledger, { networkId = 0 } = {}) {
  * @param o.attacks  run the attack suite on every script transaction (default true, Q7)
  */
 export async function offlineSession({ id, root, engine, ledger, attacks = true, launch = launchNpmHost, onEnd = () => {},
-  source = npmSource(root, { launch }) }) {
+  source = npmSource(root, { launch }), clock = null }) {
   const fp = await source.open();
   const entries = fp.entries;
-  const chain = ledger ?? memoryLedger({ engine, attacks });
+  // A scenario's replay brings its clock (origin and slot length), so absolute times in it mean what they meant (D10).
+
+  const chain = ledger ?? memoryLedger({ engine, attacks, ...(clock ? { zeroTimeMs: clock.zeroTimeMs, slotLengthMs: clock.slotLengthMs } : {}) });
   const read = ledgerReads(chain);
+  // The keyed recovery records belong to the ledger: a new session that keeps the ledger keeps them too (D2); a new
+  // ledger starts with none.
+  const ops = ledgerOperations(chain);
   let host;
   try {
     host = fp.launch({ onExit: (reason) => { fp.dispose(); onEnd(reason); } });
@@ -145,8 +158,21 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       throw e;
     }
   };
-  const remember = (prepared, kind) => {
-    if (prepared?.reservation) reservations.set(prepared.reservation, { txHash: prepared.txHash, validTo: prepared.validTo, kind });
+  /**
+   * Whether no script reads a call's validity window, from the pinned description: a keyed action or retire whose
+   * method takes no Ctx and has no @ValidAfter/@ValidBefore (its window is the attempt's bookkeeping; such calls never
+   * link). Every other call keeps the range attacks.
+   */
+  const untimed = (call) => {
+    if (call?.kind !== 'keyedAction' && call?.kind !== 'keyedRetire') return false;
+    const entry = entries.find((e) => JSON.parse(e.description).preamble?.title === call.contract);
+    const x = entry ? JSON.parse(entry.description)['x-joust'] : null;
+    const meta = (x?.actions ?? []).find((m) => m.kind === call.kind && m.name === call.method);
+    return !!meta && !meta.ctx && !(meta.policies?.validAfter?.length) && !(meta.policies?.validBefore?.length)
+      && !(meta.policies?.authorizedBy?.length);
+  };
+  const remember = (prepared, kind, untimedWindow = false) => {
+    if (prepared?.reservation) reservations.set(prepared.reservation, { txHash: prepared.txHash, validTo: prepared.validTo, kind, untimedWindow });
   };
 
   return {
@@ -157,6 +183,8 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
     root: fp.root,
     fingerprint: fp.digest,
     entries,
+    verifiers: fp.verifiers ?? null,
+    engineFiles: fp.engineFiles ?? null,
     ledger: chain,
     host,
     init,
@@ -201,7 +229,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       if (stale()) throw new StageError('session', 'stale', 'the project was rebuilt: start a new session to use the new build');
       const now = chain.slot;
       const r = await forward('prepare', { now, ttlSlots: TTL_SLOTS, call });
-      remember(r.prepared, 'call');
+      remember(r.prepared, 'call', untimed(call));
       return { ...r, now, ttlSlots: TTL_SLOTS };
     },
     view: (contract, instance, view = null, args = {}) => forward('view', { now: chain.slot, contract, instance, view, args }),
@@ -234,7 +262,7 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       if (hash !== r.txHash) throw new StageError('session', 'otherBody', 'the signed transaction is not the reserved body');
       const before = chain.attacks().length;
       try {
-        await chain.submit(cbor);
+        await chain.submit(cbor, { untimedWindow: r.untimedWindow });
       } catch (e) {
         if (!(e instanceof LedgerRefusal)) throw e;
         reservations.delete(reservation);
@@ -270,6 +298,15 @@ export async function offlineSession({ id, root, engine, ledger, attacks = true,
       return out;
     },
     protocolParams: () => chain.protocolParams(),
+    /** Whether a transaction is on the ledger, and the ledger's slot then (keyed operations reconcile with it). */
+    async landed(txHash) {
+      // The offline ledger has no rollbacks: an included transaction is final at once.
+      const slot = typeof chain.inclusion === 'function' ? chain.inclusion(txHash) : null;
+      return { landed: slot !== null, final: slot !== null, slot, tip: chain.slot };
+    },
+    /** The page's keyed operation records: in this session's memory (an offline ledger ends with its session). */
+    operations: () => ops.all(),
+    operate: (step) => ops.apply(step),
     /** Whether a script credential's stake is registered (the trusted chain's answer, for the publication checks). */
     async registered(scriptHash) {
       return (await chain.account(rewardAddress({ type: 'script', hash: scriptHash }, 0))).registered === true;

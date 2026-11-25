@@ -116,12 +116,44 @@ ledger's modelled rules passed and the scripts accepted it. It is not a node's a
 proposals, treasury donations and every certificate but stake (de)registration as `NotModelled` ("not modelled offline:
 try DevKit"), and does not model rewards or collateral loss.
 
-Supported in this version: init, actions, destroy and owned calls; argument forms for integers, bytes (with a UTF-8
-helper and identities' key hashes), Bool, Optional, records and sum types, lists, maps with integer or byte-string keys,
-and Values, and an asset offer for calls that take assets (`<policy>.<asset name> <quantity>` per line). Anything else
-(untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls the dev host refuses
-(`keyed`, `params`, `authorizedBy`, `unverifiable`), keyed contracts, `@Quorum` co-signing and calls that need a shared
-verifier (sends, MerkleMaps) are shown disabled.
+Supported: init, actions, destroy and owned calls; keyed calls; `@Quorum` calls; sends; MerkleMap contracts. Argument
+forms cover integers, bytes (with a UTF-8 helper and identities' key hashes), Bool, Optional, records and sum types, lists,
+maps with integer or byte-string keys, and Values, plus an asset offer for calls that take assets (`<policy>.<asset name>
+<quantity>` per line). Anything else (untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's
+path. Calls the dev host refuses (`params`, `authorizedBy`, `unverifiable`: `@Params` contracts and governor-authorized
+calls wait for ADR-0023) are shown disabled with the host's code.
+
+- **Sends and MerkleMaps.** JOUST's shared output and map verifiers are anchored in the pinned build, like the contract's
+  own script: a Gradle build's from its snapshot's julc-state-verifier entry, an npm build's from its runtime engine. A
+  MerkleMap call's claims and their Merkle Patricia Forestry proofs are checked before signing, as the protocol's
+  reference checker checks them. A send to an identity's key (`ctx.caller()`) lands at its enterprise address, which is the
+  identity's own address, so it shows in the identity's balance.
+- **`@Quorum`.** The call's card lists the other identities as co-signers. The caller approves and signs, then each
+  co-signer approves the same checked body and adds its signature. Co-signers are this page's identities (a connected
+  CIP-30 wallet cannot be one; sign a quorum call as an identity).
+- **Keyed calls (ADR-0016).** Before its first request, each keyed operation (including a keyed contract's creation) gets
+  a designated input: a lovelace-only output of at least 5 ADA at the payer that no other pending operation holds. It is
+  committed with the operation record, keyed by the chain (a DevKit's genesis start time; never the build, so a rebuild
+  does not hide a pending operation). Every attempt's checked hash and expiry are journaled before the body leaves the
+  page (before a CIP-30 wallet sees it), and kept across signing errors and reloads. On DevKit the records live in
+  IndexedDB and a write that does not commit stops the call; offline they live in page memory (they end with the
+  session). Keyed calls are made by the page's identities; from a connected CIP-30 wallet they are not supported yet
+  (shown disabled: a wallet may change its address between tries, which recovery cannot follow yet). On "may have
+  landed" the page asks the chain about the recorded attempts: one final on the chain closes the operation (it is
+  shown until you start another), one included but not final yet waits; one that can still land waits; when none is on the chain and none can land any more, the pending keyed
+  operations panel asks you to acknowledge it before a new designation is chosen. A cooldown is shown as "prepare again
+  at slot N" (offline, advance time); on DevKit a keyed window may start ahead (up to 60 slots) within the stability
+  window.
+- **Scenarios (D10).** "Export scenario" saves an offline session's calls as JSON: identities as labels,
+  key hashes and created ids as symbols, the offline clock's origin and slot length, no keys, mnemonics or transaction
+  bytes. Files over 1 MiB are refused. "Import scenario" replays one in a
+  fresh offline session on the scenario's own clock (so a deadline in it means what it meant) with new identities, running every step through the same checks (without the review panel), and
+  reports which steps had the same outcome. A scenario from another build is replayed with a warning naming the
+  contracts whose scripts differ. A replay keeps each argument's positions and roles (a map entry stays key and
+  value); it re-sorts only a @Quorum's key list (an argument named like a method's `@Quorum(keys = …)` field, and the
+  co-signers) and puts map arguments back in canonical key order. Calls signed by a CIP-30 wallet are left out of an
+  export (a replay has only new identities), and a session that kept an earlier ledger cannot be exported (its scenario
+  would miss the calls that made that ledger). A scenario has at most 16 identities and 500 steps.
 
 ### DevKit mode
 

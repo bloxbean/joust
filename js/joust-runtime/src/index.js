@@ -6,7 +6,7 @@ import { chainOf, blockfrostProvider, bech32Of, assemble, planOf, toJson, runCom
 import { fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
-export { loadEngine } from '#engine';
+export { loadEngine, engineFilesOf } from '#engine';
 export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed, asProvider, utxoJson } from './snapshot.js';
 export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';

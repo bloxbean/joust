@@ -59,3 +59,8 @@ async function load(url, integrity) {
     }
   });
 }
+
+/** No file identity in a browser (the page loads the engine by URL with its integrity): always null. */
+export function engineFilesOf() {
+  return null;
+}

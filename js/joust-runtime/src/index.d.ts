@@ -54,6 +54,8 @@ export function joustRuntime(o: {
 }): JoustRuntime;
 export function engineService(o: { api: ChainProvider | ChainApi; contracts: BuiltContract[]; clock: Clock; networkId?: number; ttlMs?: number; maxRounds?: number }): EngineService;
 export function loadEngine(o?: { dir?: string }): Promise<any>;
+/** The sha256 hashes of the engine files a loaded engine was loaded from (null if unknown). */
+export function engineFilesOf(api: any): Record<string, string> | null;
 export function blockfrostApi(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): ChainApi;
 export function emptySnapshot(): object;
 export function fetchNeed(provider: ChainProvider | ChainApi, snapshot: object, kind: string, key: string): Promise<void>;

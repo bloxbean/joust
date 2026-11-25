@@ -88,11 +88,32 @@ public final class Offline {
     }
 
     /**
+     * {@link #attacks(EvaluateRequest, int)}'s request with the caller's hint: {@code untimedWindow} true says no script
+     * reads the transaction's validity window (a keyed action or retire whose method reads no time, from the anchored
+     * description), so the range attacks are not run. Absent or false: they run whenever both bounds are there.
+     */
+    public record AttacksRequest(String tx, String snapshot, long zeroSlot, long zeroTimeMs, long slotLengthMs, Boolean untimedWindow) {}
+
+    public static AttackResult attacks(AttacksRequest r, int network) {
+        return attacks(new EvaluateRequest(r.tx(), r.snapshot(), r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs()), network,
+                Boolean.TRUE.equals(r.untimedWindow()));
+    }
+
+    /**
      * The attack suite on {@code tx} (ADR-0001 D16, as the JVM testkit's {@code Attacks} does on its transaction model):
      * every mutation that applies to it, evaluated against the snapshot. A mutation the scripts accept is an
      * invariant's hole; the offline tests expect none. {@code network}: 0 test networks, 1 mainnet.
      */
     public static AttackResult attacks(EvaluateRequest r, int network) {
+        return attacks(r, network, false);
+    }
+
+    /** Whether the range attacks run on {@code tx}: both bounds, and the caller did not say the window is bookkeeping. */
+    static boolean rangeAttacked(Transaction tx, boolean untimedWindow) {
+        return !untimedWindow && tx.getBody().getTtl() > 0 && tx.getBody().getValidityStartInterval() > 0;
+    }
+
+    static AttackResult attacks(EvaluateRequest r, int network, boolean untimedWindow) {
         try {
             byte[] cbor = HexUtil.decodeHexString(r.tx());
             Snapshot snapshot = Snapshot.fromJson(r.snapshot());
@@ -136,14 +157,13 @@ public final class Offline {
                 out.add(attack(cbor, snapshot, r, "required signer replaced", "I5/I11",
                         t -> t.getBody().setRequiredSigners(new ArrayList<>(List.of(fill(28, 0xEE))))));
             }
-            // Range attacks apply when the call read its window: the runtime gives such a transaction both bounds (Ctx's
-            // validFrom and validTo are the finite bounds, I6); a call without Ctx has a TTL only, which no script reads.
-            boolean window = base.getBody().getTtl() > 0 && base.getBody().getValidityStartInterval() > 0;
-            if (window) {
+            // Range attacks apply when the transaction has both bounds (a script may read them: a Ctx carries them, and a
+            // @ValidAfter/@ValidBefore method reads tx.validRange directly); a call with a TTL only has none a script reads.
+            // The one exception is the caller's: `untimedWindow` says the window is bookkeeping (a keyed action or retire
+            // whose method reads no time), from the anchored description. It errs towards more attacks, never fewer.
+            if (rangeAttacked(base, untimedWindow)) {
                 out.add(attack(cbor, snapshot, r, "upper bound removed", "I6/I11", t -> t.getBody().setTtl(0)));
                 out.add(attack(cbor, snapshot, r, "upper bound moved a slot later", "I6", t -> t.getBody().setTtl(t.getBody().getTtl() + 1)));
-            }
-            if (window) {
                 out.add(attack(cbor, snapshot, r, "lower bound removed", "I6/I11", t -> t.getBody().setValidityStartInterval(0)));
                 out.add(attack(cbor, snapshot, r, "lower bound moved a slot earlier", "I6",
                         t -> t.getBody().setValidityStartInterval(t.getBody().getValidityStartInterval() - 1)));

@@ -16,11 +16,14 @@ import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
-import { anchorsOf, checkCall as hostCheck, checkPublication, foreignPayerInput } from './check.js';
+import { anchorsOf, checkPublication, pageCheck, snapToUtxo, isKeyedRequest, foreignPayerInput } from './check.js';
+import { symbolic, concrete, outcomeOf, sameOutcome, exportScenario, importScenario, quorumKeyNames, recanonical } from './scenario.js';
+import { operationId, operationRequest, reconcile as reconcileAttempts, decide, safeSlot, releasable, keyedRefusal, opDone } from './operations.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
 const MAX_FEE = 5n * ADA;
+const SCENARIO_MAX_BYTES = 1 << 20;
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank', 'Grace', 'Heidi'];
 const SETTLE_POLL_MS = 1000;
 /** Beyond the body's expiry and depth margin, how long the page waits for an inclusion before it shows a timeout. */
@@ -62,7 +65,13 @@ async function api(route, body = {}) {
   if (j.error) throw new StageFailure(j.error);
   return j.result;
 }
-const sapi = (route, body = {}) => api(route, { session: state.session.session, ...body });
+const sapi = async (route, body = {}) => {
+  const r = await api(route, { session: state.session.session, ...body });
+  // The log's [slot N] is the latest slot an answer told (a prepare's now, a status's slot), never a stale one.
+  const slot = Number.isSafeInteger(r?.now) ? r.now : Number.isSafeInteger(r?.slot) ? r.slot : null;
+  if (slot !== null && state.session && slot > (state.session.slot ?? -1)) state.session.slot = slot;
+  return r;
+};
 
 // ---- DOM helpers (text only)
 /** replaceChildren without the holes: replaceChildren(null) would insert the text "null". */
@@ -95,7 +104,120 @@ const state = {
   instance: null,         // instance id
   history: [],
   busy: false,
+  // D10: the session's calls so far, as scenario steps, and what each created (for later steps' references).
+  scenario: { steps: [], created: [] },
+  replaying: null,        // the scenario being replayed: its steps run without the review panel
 };
+
+// ---- keyed operations (ADR-0016 M3, protocol 1 §Keyed calls; operations.js): each keyed operation spends its own
+// designated input, chosen and recorded before the first request; every attempt is recorded before the body leaves the
+// page. The server keeps the records (DevKit: in the chain's journal, so reloads, tabs and restarted commands see them;
+// offline: in the session), and each change is one atomic step. One keyed call is in flight at a time.
+const ops = {
+  all: async () => sapi('operations'),
+  async step(step) {
+    return (await sapi('operations', { step })).record;
+  },
+  get: async (id) => (await ops.all()).find((r) => r.id === id) ?? null,
+};
+
+/** What the chain says of a record's attempts (operations.js reconcile), through the server's observation. */
+async function reconcileOp(r) {
+  return reconcileAttempts(r, { lookup: (txHash) => sapi('landed', { txHash }), settlementSlots: state.session.settlementSlots ?? 0 });
+}
+
+/**
+ * The operation record for a keyed request, recorded before the first request; or { recovered, id } when this
+ * operation's attempt is final on the chain (found now, or recorded earlier): that is the outcome, reported on every
+ * try until the user starts another (the pending keyed operations panel), and nothing else starts. An attempt included
+ * but not final yet waits (it may roll back); an outcome nobody can tell any more waits for the user's acknowledgement.
+ * Keyed calls are for the page's identities only (keyedRefusal): their address never changes.
+ */
+async function operationFor(request, signer) {
+  const ident = { contract: request.contract, method: request.method, instance: request.instance ?? null, key: request.object ?? null,
+    payer: signer.address };
+  const refusal = keyedRefusal(signer, true);
+  if (refusal) throw new StageFailure({ stage: 'arguments', code: 'keyed', message: refusal });
+  const id = operationId(ident);
+  const existing = await ops.get(id);
+  const rec = existing && !existing.ambiguous && !existing.landed ? await reconcileOp(existing) : null;
+  switch (decide(existing, rec)) {
+    case 'ambiguous':
+      if (!existing.ambiguous) await ops.step({ action: 'ambiguous', id: existing.id });
+      await drawPendingOps();
+      throw new StageFailure({ stage: 'journal', code: 'ambiguous', message: 'an earlier attempt of this keyed operation may have landed: '
+        + 'check the chain, then acknowledge it in the pending keyed operations panel' });
+    case 'recovered': {
+      const txHash = existing.landed ?? rec.txHash;
+      if (!existing.landed) await ops.step({ action: 'landed', id: existing.id, txHash });
+      await drawPendingOps();
+      return { recovered: txHash, id: existing.id };
+    }
+    case 'reuse':
+      if (rec?.shallow) {
+        throw new StageFailure({ stage: 'journal', code: 'pending', retryAtSlot: rec.until, message: `an earlier attempt is included `
+          + `(${rec.shallow.slice(0, 16)}…) but not final yet${rec.until === null ? '' : `: try again after slot ${rec.until}`}` });
+      }
+      return existing;
+    default:
+      break;
+  }
+  const taken = new Set((await ops.all()).map((r) => r.designated));
+  const utxos = await chainView.utxosAt(signer.address);
+  // An ordinary lovelace-only input of at least 5 ADA that no other live operation holds.
+  const d = utxos.filter((u) => u.value.size === 1 && (u.value.get('lovelace') ?? 0n) >= 5n * ADA && !u.inlineDatum && !u.datumHash
+    && !u.referenceScriptHash && !taken.has(u.ref)).sort((a, b) => (a.value.get('lovelace') < b.value.get('lovelace') ? -1 : 1))[0];
+  if (!d) {
+    throw new StageFailure({ stage: 'arguments', code: 'designation', message: `${signer.label} has no free lovelace-only output of `
+      + 'at least 5 ADA to designate for a keyed call (fund the identity, or let a pending keyed call settle)' });
+  }
+  return ops.step({ action: 'create', record: { id, ...ident, designated: d.ref, attempts: [] } });
+}
+
+/** After mayHaveLanded: reconciles the record; returns a message for the user. */
+async function afterMayHaveLanded(op) {
+  const rec = await reconcileOp(op);
+  if (rec.state === 'fresh') {
+    await ops.step({ action: 'remove', id: op.id });
+    return 'its designated input was spent by something else: the next try chooses another one';
+  }
+  if (rec.state === 'closed') {
+    // Kept with its landed attempt (shown on every try) until the user starts another operation.
+    await ops.step({ action: 'landed', id: op.id, txHash: rec.txHash });
+    return `an earlier attempt landed (${rec.txHash.slice(0, 16)}…): the operation is done`;
+  }
+  if (rec.state === 'pending' && rec.shallow) return `an earlier attempt is included but not final yet${rec.until === null ? '' : ` (final after slot ${rec.until})`}: try again then`;
+  if (rec.state === 'pending') return `an earlier attempt can still land${rec.until === null ? '' : ` (until slot ${rec.until})`}: wait, then try again`;
+  await ops.step({ action: 'ambiguous', id: op.id });
+  return 'no attempt is on the chain and none can land any more: check the chain, then acknowledge it in the pending keyed operations panel';
+}
+
+/** The pending keyed operations (DevKit's survive reloads): an ambiguous one needs the user's acknowledgement. */
+async function drawPendingOps() {
+  const box = $('pending-ops');
+  if (!box) return;
+  const all = await ops.all().catch(() => []);
+  if (!all.length) return box.replaceChildren();
+  box.replaceChildren(h('h4', { text: 'Pending keyed operations' }), h('ul', {}, all.map((r) => h('li', { 'data-operation': r.id },
+    h('code', { text: `${r.method}${r.key ? ' ' + r.key : ''}` }), ' ', h('span', { class: 'muted', text: `designated ${r.designated.slice(0, 12)}…, `
+      + `${r.attempts.length} attempt(s)` }),
+    r.landed ? h('span', { class: 'ok', text: ` landed: ${r.landed.slice(0, 16)}… ` }) : null,
+    r.landed ? h('button', { class: 'another', 'data-another': r.id, text: 'Done: start another such operation', onclick: () => guard(async () => {
+      await ops.step({ action: 'remove', id: r.id });
+      note(`the landed keyed operation ${r.method} is closed; another may start`);
+      await drawPendingOps();
+    }) }) : null,
+    releasable(r) ? h('button', { class: 'release', 'data-release': r.id, text: 'Release (nothing of it left the page)', onclick: () => guard(async () => {
+      await ops.step({ action: 'release', id: r.id });
+      note(`the keyed operation ${r.method} was released: its designated input is free`);
+      await drawPendingOps();
+    }) }) : null,
+    r.ambiguous ? h('button', { class: 'ack', text: 'Acknowledge (I checked the chain): forget it', onclick: () => guard(async () => {
+      await ops.step({ action: 'remove', id: r.id });
+      note(`the keyed operation ${r.method} was forgotten after acknowledgement`);
+      await drawPendingOps();
+    }) }) : null))));
+}
 
 // The identities' chain view: the session's outputs, read through the server (the chain is trusted, #169).
 const chainView = {
@@ -106,21 +228,16 @@ const chainView = {
     throw new Error('the playground submits through its server');
   },
 };
-function snapToUtxo(u) {
-  return { ref: `${u.tx_hash}#${u.output_index}`, txHash: u.tx_hash, index: u.output_index, address: u.address,
-    value: new Map(u.amount.map((a) => [a.unit, BigInt(a.quantity)])), inlineDatum: u.inline_datum ?? null,
-    datumHash: u.data_hash ?? null, referenceScriptHash: u.reference_script_hash ?? null };
-}
 
 const devkit = () => state.session?.mode === 'devkit';
-function newIdentity(i) {
+function newIdentity(i, name = null) {
   if (devkit()) {
     // D5: DevKit's public test mnemonic, by index: test-only keys (anyone can derive them).
     const index = (state.session.identityBase ?? 1) + i;
     const wallet = devWallet({ chain: chainView, mnemonic: DEVKIT_MNEMONIC, index, networkId: 0 });
     // As offline: the payment key's enterprise address, where the host pays (and spends from) the identity's key hash;
     // the faucet tops that address up. (A CIP-30 wallet keeps its own change address.)
-    return { label: `${NAMES[i] ?? `Identity ${i + 1}`} (DevKit #${index})`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0),
+    return { label: `${name ?? NAMES[i] ?? `Identity ${i + 1}`} (DevKit #${index})`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0),
       keyHash: wallet.keyHash, testOnly: true };
   }
   const mnemonic = generateMnemonic(wordlist, 256);
@@ -128,7 +245,7 @@ function newIdentity(i) {
   // The identity's address is the enterprise address of its payment key: what the dev host pays an identity's key hash
   // to and spends from (protocol 1: enterprise wallet addresses on the session network), so a payout to it is its own
   // balance. The wallet signs with that payment key.
-  return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0), keyHash: wallet.keyHash };
+  return { label: name ?? NAMES[i] ?? `Identity ${i + 1}`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0), keyHash: wallet.keyHash };
 }
 /** Funds an identity: offline from nowhere; on DevKit from its faucet, when it holds less than 100 ADA. */
 async function fund(id) {
@@ -159,6 +276,9 @@ async function startSession(opts = {}) {
   if (!state.identities.length) for (let i = 0; i < 3; i++) state.identities.push(newIdentity(i));
   if (!opts.keepLedgerOf || devkit()) for (const id of state.identities) await fund(id);
   state.instance = null;
+  // A session that kept an earlier ledger cannot be exported: its scenario would miss the calls that made that ledger
+  // (Fable FM5).
+  state.scenario = { steps: [], created: [], keptLedger: !!opts.keepLedgerOf, cip30: 0 };
   // A new session may run a rebuilt project: its contracts are the new build's (a removed one is dropped).
   drawContracts();
   if (state.contract && !state.session.contracts.some((c) => c.name === state.contract.name && c.served)) {
@@ -180,6 +300,7 @@ async function refresh() {
   state.session = await sapi('session');
   drawBanner();
   await drawIdentities();
+  await drawPendingOps();
   if (state.contract) await drawInstances();
 }
 
@@ -221,15 +342,31 @@ function drawBanner() {
         const secs = Number($('advance-seconds').value);
         if (!Number.isSafeInteger(secs) || secs <= 0) throw new StageFailure({ stage: 'arguments', message: 'seconds: a positive integer' });
         const r = await sapi('advance', { ms: secs * 1000 });
+        state.scenario.steps.push({ advanceMs: secs * 1000 });
+        state.scenario.created.push(null);
         note(`time advanced ${secs} s: slot ${r.slot}`);
         await refresh();
       }) }),
+      h('span', { class: 'sep' }),
+      h('button', { id: 'export-scenario', text: 'Export scenario', disabled: !!state.scenario?.keptLedger,
+        title: state.scenario?.keptLedger ? 'this session kept an earlier ledger: its scenario would miss the calls that made it'
+          : 'the calls so far, as data: no keys, no transaction bytes', onclick: () => guard(exportCurrent) }),
+      h('label', { class: 'inline button', title: 'replay a scenario in a fresh offline session, with new identities' }, 'Import scenario ',
+        h('input', { type: 'file', id: 'import-scenario', accept: 'application/json,.json', onchange: (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          // A scenario is small data: anything over 1 MiB is refused before it is read.
+          if (f && f.size > SCENARIO_MAX_BYTES) {
+            guard(async () => { throw new StageFailure({ stage: 'arguments', code: 'scenario', message: `a scenario of ${f.size} bytes: at most ${SCENARIO_MAX_BYTES}` }); });
+          } else if (f) guard(async () => replay(await f.text()));
+        } })),
       h('button', { id: 'reset', text: 'Reset ledger', onclick: () => guard(async () => {
         state.session = await sapi('session/reset');
         drawContracts();
         for (const id of state.identities) await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
         state.instance = null;
         state.history = [];
+        state.scenario = { steps: [], created: [], keptLedger: false, cip30: 0 };
         drawHistory();
         note('the ledger and the dev host were reset; identities funded again');
         await refresh();
@@ -366,15 +503,17 @@ async function selectContract(name) {
   const { policy: hash, address } = anchors;
   const x = r.description['x-joust'] ?? {};
   const deployment = await sapi('deployment', { contract: name });
-  const needsVerifier = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends) || !!r.description.definitions?.['org.julclang.state.api.MerkleMap'];
-  if (deployment.scriptHashes?.spend !== hash || deployment.addresses?.contract !== address) {
+  const sends = [...(x.actions ?? []), ...(x.creations ?? [])].some((m) => m.returns?.sends);
+  const maps = !!r.description.definitions?.['org.julclang.state.api.MerkleMap'];
+  // The shared verifiers come from the pinned build too (anchorsOf): a host naming others is refused like the contract.
+  const differs = (key) => anchors[key] && deployment.scriptHashes?.[key] !== undefined && deployment.scriptHashes[key] !== anchors[key].hash;
+  if (deployment.scriptHashes?.spend !== hash || deployment.addresses?.contract !== address || differs('outputVerifier') || differs('mapVerifier')) {
     throw new StageFailure({ stage: 'verification', code: 'deployment',
       message: 'the dev host\'s deployment differs from the build this session pinned: start a new session' });
   }
-  // Keyed contracts (ADR-0016) need the page's designated input and operation records: they arrive with M4.
-  const keyed = Array.isArray(x.keyed) ? x.keyed.length > 0 : !!x.keyed && Object.keys(x.keyed).length > 0;
-  state.contract = { name, describe: r.describe, description: r.description, script: r.script,
-    anchors, deployment, needsVerifier, keyed };
+  const missing = sends && !anchors.outputVerifier ? 'unsupported: this build carries no output verifier for its sends'
+    : maps && !anchors.mapVerifier ? 'unsupported: this build carries no map verifier for its MerkleMaps' : null;
+  state.contract = { name, describe: r.describe, description: r.description, script: r.script, anchors, deployment, missing };
   state.instance = null;
   $('contract-title').replaceChildren(h('span', { text: name }), ' ', h('code', { class: 'muted', title: 'the contract address (derived from the pinned build)', text: address }));
   await drawInstances();
@@ -424,8 +563,10 @@ async function drawObjects() {
 
 // ---- operations (D6): every call describe lists; unsupported ones disabled with their code
 const CREATION_KINDS = new Set(['init']);
-const NEEDS_INSTANCE = new Set(['action', 'destroy', 'ownedInit', 'ownedAction', 'ownedDestroy']);
+const KEYED_KINDS = new Set(['keyedInit', 'keyedAction', 'keyedRemove', 'keyedRetire']);
+const NEEDS_INSTANCE = new Set(['action', 'destroy', 'ownedInit', 'ownedAction', 'ownedDestroy', ...KEYED_KINDS]);
 const NEEDS_OBJECT = new Set(['ownedAction', 'ownedDestroy']);
+const NEEDS_KEY = new Set(['keyedAction', 'keyedRemove', 'keyedRetire']);
 const PAGE_KINDS = new Set([...CREATION_KINDS, ...NEEDS_INSTANCE]);
 
 function metaOf(description, call) {
@@ -446,9 +587,9 @@ function drawOperations() {
     if (!reason && call.kind === 'view') continue;
     if (!reason && !PAGE_KINDS.has(call.kind)) reason = `unsupported: ${call.kind} calls arrive in a later milestone`;
     if (!reason && !meta) reason = 'unsupported: not in the description';
-    if (!reason && meta.policies?.quorum) reason = 'unsupported: @Quorum co-signing arrives with M4';
-    if (!reason && c.needsVerifier) reason = 'unsupported: calls with a shared verifier (sends, maps) are not signed in M1';
-    if (!reason && c.keyed) reason = 'unsupported: keyed contracts (designated inputs) arrive with M4';
+    if (!reason && c.missing && (meta.returns?.sends || c.description.definitions?.['org.julclang.state.api.MerkleMap'])) reason = c.missing;
+    if (!reason && meta.policies?.quorum && signer.cip30) reason = 'unsupported: a @Quorum call is co-signed by this page\'s identities; sign it as one of them';
+    if (!reason) reason = keyedRefusal(signer, isKeyedRequest(c.description, call));
     const card = h('div', { class: 'operation' + (reason ? ' disabled' : ''), 'data-call': `${call.kind}:${call.method}` },
       h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: call.kind })));
     box.append(card);
@@ -473,12 +614,21 @@ function drawOperations() {
       form.append(h('div', { class: 'field' }, h('label', { text: 'pay (assets)' }), assetsInput));
     }
     let objectInput = null;
-    if (NEEDS_OBJECT.has(call.kind)) {
-      objectInput = h('input', { type: 'text', placeholder: 'object id (hex)', 'data-kind': 'object' });
-      form.append(h('div', { class: 'field' }, h('label', { text: 'object' }), objectInput));
+    if (NEEDS_OBJECT.has(call.kind) || NEEDS_KEY.has(call.kind)) {
+      const keyed = NEEDS_KEY.has(call.kind);
+      objectInput = h('input', { type: 'text', placeholder: keyed ? 'key (hex)' : 'object id (hex)', 'data-kind': 'object' });
+      form.append(h('div', { class: 'field' }, h('label', { text: keyed ? 'key' : 'object' }), objectInput));
+    }
+    // @Quorum (ADR-0009): co-signers among this page's identities; each approves and signs the same checked body.
+    let cosignerBoxes = null;
+    if (meta.policies?.quorum) {
+      cosignerBoxes = state.identities.filter((id, i) => i !== state.signer && !id.cip30).map((id) => ({ id,
+        box: h('input', { type: 'checkbox', 'data-cosigner': id.label }) }));
+      form.append(h('div', { class: 'field' }, h('label', { text: `co-signers (@Quorum ${meta.policies.quorum.keys} / ${meta.policies.quorum.threshold})` }),
+        ...cosignerBoxes.map(({ id, box }) => h('label', { class: 'inline' }, box, ' ', id.label))));
     }
     const go = h('button', { class: 'run', text: 'Review…', disabled: bad.length > 0 || (NEEDS_INSTANCE.has(call.kind) && !state.instance),
-      onclick: () => guard(() => run(call, meta, { getters, controls, payInput, assetsInput, objectInput })) });
+      onclick: () => guard(() => run(call, meta, { getters, controls, payInput, assetsInput, objectInput, cosignerBoxes })) });
     card.append(go);
     if (bad.length) card.append(h('span', { class: 'badge', text: 'UNSUPPORTED argument types: ' + bad.map((u) => u.path).join(', ') }));
     if (NEEDS_INSTANCE.has(call.kind) && !state.instance) card.append(h('span', { class: 'muted', text: ' choose an instance first' }));
@@ -562,13 +712,77 @@ async function run(call, meta, form) {
   if (NEEDS_INSTANCE.has(call.kind)) request.instance = state.instance;
   if (form.objectInput) request.object = form.objectInput.value.trim().toLowerCase();
   if (pay) request.pay = pay;
+  const cosigners = (form.cosignerBoxes ?? []).filter((x) => x.box.checked).map((x) => x.id);
+  return call1(request, meta, signer, cosigners, label);
+}
+
+/** A request, end to end (D7 steps 2–7), recorded as a scenario step; also what a scenario replay runs. */
+async function call1(request, meta, signer, cosigners, label) {
+  if (cosigners.length) request.cosigners = cosigners.map((x) => x.keyHash).sort();
+  const step = { as: signer.label, call: symbolic(stripped(request), state.identities, state.scenario.created,
+    { sorted: quorumKeyNames(state.contract?.description) }) };
+  try {
+    const created = await call2(request, meta, signer, cosigners, label);
+    recordStep({ ...step, expect: 'confirmed' }, created, signer);
+  } catch (e) {
+    // A declined review is no outcome of the contract's: not a step.
+    if (!(e.code === 'declined' && e.stage === 'wallet')) recordStep({ ...step, expect: outcomeOf(e) }, null, signer);
+    throw e;
+  }
+}
+/** The call as a scenario keeps it: no payer address (the step's identity pays), nothing the page derives per attempt. */
+function stripped(request) {
+  const { address, designated, operation, ...rest } = request;
+  void address; void designated; void operation;
+  return rest;
+}
+function recordStep(step, created, signer = null) {
+  if (state.replaying) return;
+  // A step a CIP-30 wallet signed cannot be replayed (a scenario's identities are new keys): it is left out, and the
+  // export says so (Fable FM4).
+  if (signer?.cip30) {
+    state.scenario.cip30 = (state.scenario.cip30 ?? 0) + 1;
+    return;
+  }
+  state.scenario.steps.push(step);
+  state.scenario.created.push(created ?? null);
+}
+
+async function call2(request, meta, signer, cosigners, label) {
+  const c = state.contract;
+  const call = request;
+  if (cosigners.length) request.cosigners = cosigners.map((x) => x.keyHash).sort();
   // First use of a contract: its prerequisites, through the same steps (D7).
   await prerequisites(signer);
+  // A keyed call: its operation record and designated input, persisted before the first request.
+  const op = isKeyedRequest(c.description, request) ? await operationFor(request, signer) : null;
+  if (op?.recovered) {
+    // An earlier attempt of this operation landed (a lost confirmation): that is the outcome; nothing is prepared now.
+    record({ label, outcome: 'confirmed earlier (recovered)', txHash: op.recovered });
+    note(`${label}: an earlier attempt landed (${op.recovered.slice(0, 16)}…): that operation is done. To start another, close it in the `
+      + 'pending keyed operations panel first', 'ok');
+    await refresh();
+    return null;
+  }
+  if (op) {
+    Object.assign(request, { designated: op.designated, operation: operationRequest(op) });
+    // DevKit: the keyed window's limits (start ahead, end within the stability window), as the server allows them.
+    if (devkit() && state.session.keyedLimits) request.pageLimits = state.session.keyedLimits;
+  }
   // 2. prepare (stage host)
   let r;
   try {
     r = await sapi('prepare', { call: request });
   } catch (e) {
+    // mayHaveLanded: the designation is spent; the chain says whether by one of this operation's attempts.
+    if (op && e.code === 'mayHaveLanded') {
+      const what = await afterMayHaveLanded(op);
+      await drawPendingOps();
+      throw labelled({ ...e, message: `${e.message} (${what})` }, 'host', label);
+    }
+    // A refused prepare: nothing of this operation left the page, so its designated input is free again (only while
+    // the record has no attempt: one that was handed out may still land).
+    if (op) await ops.step({ action: 'release', id: op.id }).catch(() => {});
     throw labelled(e, 'host', label);
   }
   // Until the signed body is submitted, every way out (a refusal, a decline, a check or signing that throws, a malformed
@@ -585,15 +799,25 @@ async function run(call, meta, form) {
     }
     report = checked.report;
     // 4. review, 5. sign, 6. submit, 7. settle
-    await reviewSignSubmit(r, label, signer, { predicted: r.predicted, request, report });
+    await reviewSignSubmit(r, label, signer, { predicted: r.predicted, request, report, cosigners, op });
   } finally {
     const reservation = r?.prepared?.reservation;
     if (!report?.submitted && typeof reservation === 'string') await sapi('discard', { reservation }).catch(() => {});
+    // Nothing left the page (a check refused, a decline, a signature that failed): the designation is released too.
+    if (!report?.submitted && op) await ops.step({ action: 'release', id: op.id }).catch(() => {});
+  }
+  // A keyed operation is done once its transaction is final: offline at once; on DevKit the settlement's background
+  // poll clears it at final (a shallow inclusion may roll back: the record, its designation and attempt, stay until
+  // then, so a reload and a retry reuse them).
+  if (op && opDone(devkit(), true) === 'clear') {
+    await ops.step({ action: 'remove', id: op.id });
+    await drawPendingOps();
   }
   // The created instance as the body makes it (the checker derived it from the seed), not the host's claim.
   if (call.kind === 'init' && report.created) state.instance = report.created;
   await drawInstances();
   drawOperations();
+  return report.created ?? null;
 }
 
 /** The offered assets (`pay.assets`): [[policy, [[name, quantity]…]]…], policies and names in canonical CBOR order. */
@@ -621,21 +845,11 @@ function offeredAssets(text) {
 async function checkCall(r, request, meta, signer) {
   const c = state.contract;
   const params = await sapi('protocolParams');
-  const { snapshots, outputs } = await resolveInputs(r.prepared.cbor);
-  const host = hostCheck({ result: r, request, anchors: c.anchors, snapshots, params, maxFee: MAX_FEE });
-  if (host.problems.length) return { problems: host.sites };
-  const walletUtxos = new Map((await chainView.utxosAt(signer.address)).map((u) => [u.ref, u]));
-  const { problems } = await verifyPrepared({
-    description: c.description, txHex: r.prepared.cbor,
-    // No slotConfig: offline time is the ledger's slot (advance moves it), not the wall clock; the session's now is
-    // the chain's tip, which the page trusts as it trusts the chain (#169).
-    deployment: { policy: c.anchors.policy, address: c.anchors.address, networkId: 0 },
-    wallet: { addresses: [signer.address], keyHashes: [signer.keyHash], utxos: walletUtxos },
-    call: { ...request, key: request.object, meta, cosignerKeys: request.cosigners ?? [] },
-    chain: { tip: r.now, params, utxo: async (ref) => outputs.get(ref) ?? null },
-    limits: { maxFee: MAX_FEE, maxValiditySlots: r.ttlSlots, maxStartSlots: 60, maxBackdateSlots: 0 },
-  });
-  return { problems, report: host.report };
+  const { snapshots } = await resolveInputs(r.prepared.cbor);
+  const walletUtxos = await sapi('utxos', { address: signer.address });
+  // check.js's pageCheck: the same function the Node tests run.
+  return pageCheck({ result: r, request, meta, anchors: c.anchors, snapshots, params, maxFee: MAX_FEE, clock: state.session.clock,
+    signer: { address: signer.address, keyHash: signer.keyHash }, walletUtxos });
 }
 
 /** The trusted chain's outputs for every input, reference input and collateral input of a body (none if unreadable). */
@@ -700,110 +914,17 @@ async function prerequisites(signer) {
   throw new StageFailure({ stage: 'host', code: 'prerequisite', message: 'the prerequisites did not settle' });
 }
 
-function reviewSignSubmit(r, label, signer, { predicted, request, publication, report }) {
-  return new Promise((resolve, reject) => {
+/**
+ * The review panel (D7 step 4): what the checks read from the body; resolves true on approval, false on decline. A
+ * scenario replay approves without showing it (the same checks ran).
+ */
+function approval({ title, lines, states, predicted, who }) {
+  if (state.replaying) return Promise.resolve(true);
+  return new Promise((resolve) => {
     const panel = $('review');
-    const done = (fn) => (...a) => { panel.hidden = true; panel.replaceChildren(); fn(...a); };
-    const approve = done(async () => {
-      try {
-        // 5. sign (stage wallet), after the explicit approval
-        let witnesses;
-        if (signer.cip30) {
-          // The wallet as it is now (#179 P2): still on this network, the same payer, and holding every input the body
-          // spends from it, as DevKit does. Then the handoff is recorded before the wallet sees the body: from here on
-          // it is never discarded (only its expiry releases its inputs, ADR-0022 D8).
-          await walletStillMatches(signer, r.prepared.cbor, label, { publication: !!publication });
-          try {
-            await sapi('handoff', { reservation: r.prepared.reservation });
-          } catch (e) {
-            throw labelled(e, 'wallet', label);
-          }
-          report.submitted = true;
-        }
-        try {
-          // CIP-30 signTx(tx, partialSign): the wallet adds its own witnesses only.
-          witnesses = await signer.wallet.signTx(r.prepared.cbor, true);
-        } catch (e) {
-          // An identity's keys are in this page: its body went nowhere and is discarded on the way out.
-          throw new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
-        }
-        const signed = assemble(r.prepared.cbor, witnesses);
-        // 6. submit (stage ledger)
-        let res;
-        try {
-          res = await sapi('submit', { reservation: r.prepared.reservation, cbor: signed.cbor });
-        } catch (e) {
-          // A lost answer (the request may have reached the ledger or the node).
-          if (!(e instanceof StageFailure) || e.code === 'http') {
-            report.submitted = true;   // never released: it may be on the ledger
-            if (devkit()) {
-              // DevKit: the server journaled the submission before sending it; the chain says whether it landed.
-              res = { txHash: r.prepared.txHash, status: 'submitted', transport: 'unknown', validTo: Number(parseTx(r.prepared.cbor).ttl),
-                settlementSlots: state.session.settlementSlots };
-            } else {
-              res = await reconcile(r.prepared.txHash);
-              if (!res) {
-                record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
-                  message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
-                note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
-                reject(Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true }));
-                return;
-              }
-            }
-          } else {
-            // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
-            // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a
-            // host that ended, a malformed transaction) must not leave the instance pending.
-            // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
-            // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
-            if (devkit() && (e.code === 'nodeRefused' || e.code === 'alreadyRegistered')) report.submitted = true;
-            throw labelled(e, 'ledger', label);
-          }
-        }
-        report.submitted = true;
-        // 7. settle: on DevKit as the chain settles it (I7); offline at once
-        if (devkit()) {
-          resolve(await settlement(res, label));
-          return;
-        }
-        record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
-        confirmedNotes(label, res);
-        await refresh();
-        resolve(res);
-      } catch (e) {
-        reject(e);
-      }
-    });
-    const decline = done(async () => {
-      record({ label, outcome: 'declined' });
-      note(`${label}: declined; the body was discarded`);
-      reject(Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: 'declined at review', label }), { quiet: true }));
-    });
-    // Everything here is read from the body and the trusted chain by the checks (report), not from the host.
-    const { plan, walletNet, signers } = report;
-    // Positive amounts leave the signer's wallet; negative ones come back to it (a destroy returns its locked ADA).
-    const amount = (unit, q) => (unit === 'lovelace' ? ada(q < 0n ? -q : q) : `${q < 0n ? -q : q} ${unit}`);
-    const entries = Object.entries(walletNet ?? {}).map(([unit, q]) => [unit, BigInt(q)]).filter(([, q]) => q !== 0n);
-    const pays = entries.filter(([, q]) => q > 0n).map(([u, q]) => amount(u, q)).join(', ');
-    const gets = entries.filter(([, q]) => q < 0n).map(([u, q]) => amount(u, q)).join(', ');
-    const net = [pays && `pays ${pays}`, gets && `receives ${gets}`].filter(Boolean).join('; ') || 'nothing';
-    const lines = [
-      ['signer', `${signer.label} (${signer.keyHash})`],
-      ['transaction', r.prepared.txHash],
-      ['fee', ada(plan.fee)],
-      [`${signer.label}, in all`, net],
-      ['validity', `${plan.validFrom ?? '-'} … ${plan.validTo ?? '-'} (exclusive), now ${r.now}`],
-      ['signers', signers.join(', ') || 'none'],
-      ['scripts run', String(plan.redeemers.length)],
-      ['outputs', plan.outputs.map((o) => `${o.address.slice(0, 24)}… ${ada(o.value.lovelace)}${Object.keys(o.value).length > 1 ? ` + ${Object.keys(o.value).length - 1} asset(s)` : ''}${o.datum ? ' (datum)' : ''}`).join('\n')],
-    ];
-    // The state change, as the checks read it: before from the chain's target output, after from the body's checked
-    // continuation (a destroy removes the state; a creation has none before).
-    const states = publication ? null : h('div', { class: 'states' },
-      h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
-      h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) }));
+    const done = (ok) => () => { panel.hidden = true; panel.replaceChildren(); resolve(ok); };
     fill(panel,
-      h('h3', { text: publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}` }),
+      h('h3', { text: title }),
       h('p', { class: 'muted', text: 'The page checked this body itself: everything above the line is read from the body and the chain.' }),
       h('table', {}, lines.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
       states,
@@ -811,11 +932,141 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
       predicted ? h('details', { class: 'predicted' }, h('summary', { text: 'The dev host\'s prediction (unchecked, not used to decide)' }),
         h('pre', { id: 'review-predicted', text: show(predicted) })) : null,
       h('div', { class: 'actions' },
-        h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${signer.label}`, onclick: approve }),
-        h('button', { id: 'decline', text: 'Decline', onclick: decline })));
+        h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${who}`, onclick: done(true) }),
+        h('button', { id: 'decline', text: 'Decline', onclick: done(false) })));
     panel.hidden = false;
     panel.scrollIntoView({ block: 'nearest' });
   });
+}
+
+/**
+ * One signer's witnesses on the body, after its own approval (stage wallet). A CIP-30 wallet is checked as it is now
+ * (#179 P2) and the handoff recorded before it sees the body: from then on the body is never discarded (only its expiry
+ * releases its inputs, ADR-0022 D8).
+ */
+async function signAs(r, id, label, report, approve, journal = null, { publication = false } = {}) {
+  if (!await approve()) {
+    record({ label, outcome: 'declined' });
+    note(`${label}: declined by ${id.label}; the body was discarded`);
+    throw Object.assign(new StageFailure({ stage: 'wallet', code: 'declined', message: `declined at review by ${id.label}`, label }), { quiet: true });
+  }
+  if (id.cip30) await walletStillMatches(id, r.prepared.cbor, label, { publication });
+  // A keyed attempt is journaled (committed) before the body leaves the page: before a CIP-30 handoff, before signing.
+  if (journal) await journal();
+  if (id.cip30) {
+    try {
+      await sapi('handoff', { reservation: r.prepared.reservation });
+    } catch (e) {
+      throw labelled(e, 'wallet', label);
+    }
+    report.submitted = true;
+  }
+  try {
+    // CIP-30 signTx(tx, partialSign): the wallet adds its own witnesses only.
+    return await id.wallet.signTx(r.prepared.cbor, true);
+  } catch (e) {
+    // An identity's keys are in this page: its body went nowhere and is discarded on the way out.
+    throw new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
+  }
+}
+
+async function reviewSignSubmit(r, label, signer, { predicted, request, publication, report, cosigners = [], op = null }) {
+  // Everything here is read from the body and the trusted chain by the checks (report), not from the host.
+  const { plan, walletNet, signers } = report;
+  // Positive amounts leave the signer's wallet; negative ones come back to it (a destroy returns its locked ADA).
+  const amount = (unit, q) => (unit === 'lovelace' ? ada(q < 0n ? -q : q) : `${q < 0n ? -q : q} ${unit}`);
+  const entries = Object.entries(walletNet ?? {}).map(([unit, q]) => [unit, BigInt(q)]).filter(([, q]) => q !== 0n);
+  const pays = entries.filter(([, q]) => q > 0n).map(([u, q]) => amount(u, q)).join(', ');
+  const gets = entries.filter(([, q]) => q < 0n).map(([u, q]) => amount(u, q)).join(', ');
+  const net = [pays && `pays ${pays}`, gets && `receives ${gets}`].filter(Boolean).join('; ') || 'nothing';
+  const lines = [
+    ['signer', `${signer.label} (${signer.keyHash})`],
+    ...(cosigners.length ? [['co-signers', cosigners.map((x) => `${x.label} (${x.keyHash})`).join('\n')]] : []),
+    ['transaction', r.prepared.txHash],
+    ['fee', ada(plan.fee)],
+    [`${signer.label}, in all`, net],
+    ['validity', `${plan.validFrom ?? '-'} … ${plan.validTo ?? '-'} (exclusive), now ${r.now}`],
+    ['signers', signers.join(', ') || 'none'],
+    ['scripts run', String(plan.redeemers.length)],
+    ['outputs', plan.outputs.map((o) => `${o.address.slice(0, 24)}… ${ada(o.value.lovelace)}${Object.keys(o.value).length > 1 ? ` + ${Object.keys(o.value).length - 1} asset(s)` : ''}${o.datum ? ' (datum)' : ''}`).join('\n')],
+  ];
+  // The state change, as the checks read it: before from the chain's target output, after from the body's checked
+  // continuation (a destroy removes the state; a creation has none before). Built per panel (a node lives in one).
+  const states = () => (publication ? null : h('div', { class: 'states' },
+    h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
+    h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) })));
+  const title = publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}`;
+  // 5. sign (stage wallet): the caller, then each co-signer, each after its own approval of the same checked body.
+  let cbor = r.prepared.cbor;
+  // The keyed journal entry (protocol 1, keyed duty 1): the checked hash and expiry, committed before the body leaves.
+  // Only this run's own attempt is ever taken back out (a replaced tab cannot erase another's), one atomic step each.
+  let journaled = false;
+  const journal = op ? async () => {
+    await ops.step({ action: 'addAttempt', id: op.id, attempt: { txHash: r.prepared.txHash, validTo: safeSlot(plan.validTo) } });
+    journaled = true;
+  } : null;
+  const unjournal = async () => {
+    if (!op || !journaled) return;
+    await ops.step({ action: 'removeAttempt', id: op.id, txHash: r.prepared.txHash });
+    journaled = false;
+  };
+  try {
+    for (const id of [signer, ...cosigners]) {
+      const who = id === signer ? id.label : `${id.label} (co-signer)`;
+      const w = await signAs(r, id, label, report, () => approval({ title: id === signer ? title : `${title}: co-sign`, lines, states: states(),
+        predicted, who }), id === signer ? journal : null, { publication: !!publication });
+      cbor = assemble(cbor, w).cbor;
+    }
+  } catch (e) {
+    // A body that never left the page (an identity's signature, a co-signer declining) leaves the journal; one handed to
+    // a CIP-30 wallet stays journaled, across signing errors and reloads.
+    if (!report.submitted) await unjournal().catch(() => {});
+    throw e;
+  }
+  // 6. submit (stage ledger)
+  let res;
+  try {
+    res = await sapi('submit', { reservation: r.prepared.reservation, cbor });
+  } catch (e) {
+    // A lost answer (the request may have reached the ledger or the node).
+    if (!(e instanceof StageFailure) || e.code === 'http') {
+      report.submitted = true;   // never released: it may be on the ledger
+      if (devkit()) {
+        // DevKit: the server journaled the submission before sending it; the chain says whether it landed.
+        res = { txHash: r.prepared.txHash, status: 'submitted', transport: 'unknown', validTo: Number(parseTx(r.prepared.cbor).ttl),
+          settlementSlots: state.session.settlementSlots };
+      } else {
+        res = await reconcile(r.prepared.txHash);
+        if (!res) {
+          record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
+            message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
+          note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
+          throw Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true });
+        }
+      }
+    } else {
+      // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
+      // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a host
+      // that ended, a malformed transaction) must not leave the instance pending. A refused keyed attempt leaves the
+      // journal (it is rebuilt at once).
+      // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its inputs
+      // (the server refuses that discard as well); its keyed attempt stays journaled. A failure before the node saw it
+      // is still released.
+      if (devkit() && (e.code === 'nodeRefused' || e.code === 'alreadyRegistered')) report.submitted = true;
+      else if (!report.submitted) await unjournal();
+      throw labelled(e, 'ledger', label);
+    }
+  }
+  report.submitted = true;
+  // 7. settle: on DevKit as the chain settles it (I7); offline at once
+  if (devkit()) return settlement(res, label, op ? async () => {
+    await ops.step({ action: 'removeIfFinal', id: op.id, designated: op.designated, txHash: r.prepared.txHash });
+    await drawPendingOps();
+  } : null);
+  record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
+  confirmedNotes(label, res);
+  await refresh();
+  return res;
 }
 /**
  * A CIP-30 wallet just before it signs (#179 P2): its network, its change address (the payer the body was built and
@@ -867,7 +1118,7 @@ async function walletStillMatches(signer, cbor, label, { publication = false } =
  * again), then on to final in the background. Never shown as confirmed before the chain reported it included (I7);
  * expiry, or no inclusion within the window, fails at stage confirmation.
  */
-async function settlement(res, label) {
+async function settlement(res, label, onFinal = null) {
   const entry = { label, outcome: 'submitted', txHash: res.txHash };
   state.history.unshift({ at: state.session?.slot ?? null, ...entry });
   const update = (patch) => {
@@ -901,11 +1152,100 @@ async function settlement(res, label) {
   note(`${label}: included in slot ${included.slot} (not final yet)`, 'ok');
   await refresh();
   // On to final, without holding the page.
-  poll((st) => st.status === 'final').then((st) => {
+  poll((st) => st.status === 'final').then(async (st) => {
     update({ outcome: 'final', slot: st.slot });
     note(`${label}: final (slot ${st.slot})`, 'ok');
+    // A keyed operation's record is cleared only now (an expired or rolled-back body keeps it: recovery takes over).
+    if (onFinal) await onFinal().catch((e) => note(`${label}: the keyed operation record was not cleared (${e.message})`, 'warn'));
   }, (e) => note(`${label}: ${e.message}`, 'error'));
   return { ...res, slot: included.slot };
+}
+
+// ---- scenarios (D10)
+async function contractHashes() {
+  const out = {};
+  for (const c of state.session.contracts.filter((x) => x.served)) {
+    out[c.name] = { spend: anchorsOf(await sapi('contract', { contract: c.name })).policy };
+  }
+  return out;
+}
+async function exportCurrent() {
+  if (state.scenario.keptLedger) {
+    throw new StageFailure({ stage: 'arguments', code: 'scenario', message: 'this session kept an earlier session\'s ledger: its scenario '
+      + 'would miss the calls that made that ledger, so it cannot be exported (start a new session with an empty ledger)' });
+  }
+  // Every identity by label (a step may name one it does not sign as, a recipient's key hash say).
+  const text = exportScenario({ fingerprint: state.session.fingerprint, contracts: await contractHashes(),
+    identities: state.identities.filter((i) => !i.cip30).map((i) => i.label), clock: state.session.clock, steps: state.scenario.steps });
+  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: 'scenario.json', id: 'scenario-link' });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  note(`scenario exported: ${state.scenario.steps.length} step(s)`, 'ok');
+  if (state.scenario.cip30) {
+    note(`${state.scenario.cip30} call(s) signed by a CIP-30 wallet are not in the scenario (a replay has only new identities)`, 'warn');
+  }
+}
+/** Replays a scenario in a fresh offline session, with new identities (one per label), comparing each step's outcome. */
+async function replay(text) {
+  if (devkit()) throw new StageFailure({ stage: 'arguments', code: 'scenario', message: 'scenarios replay in an offline session' });
+  const { scenario, warnings } = importScenario(text, { fingerprint: state.session.fingerprint, contracts: await contractHashes() });
+  for (const w of warnings) note(`scenario: ${w}`, 'warn');
+  state.identities = scenario.identities.map((l, i) => newIdentity(i, l));
+  state.signer = 0;
+  state.history = [];
+  // The scenario's clock: absolute times in its steps mean what they meant (an older scenario has none: today's).
+  await startSession(scenario.clock ? { clock: scenario.clock } : {});
+  const created = [];
+  const results = [];
+  state.replaying = { created };
+  try {
+    for (const [i, st] of scenario.steps.entries()) {
+      if (st.advanceMs) {
+        await sapi('advance', { ms: st.advanceMs });
+        created.push(null);
+        continue;
+      }
+      const signer = state.identities.find((x) => x.label === st.as);
+      const label = `replay ${i + 1}: ${signer.label}: ${st.call.method}`;
+      let outcome;
+      let id = null;
+      try {
+        // A step that refers to what an earlier step failed to create fails at stage scenario, and the replay goes on.
+        let call;
+        try {
+          call = concrete(st.call, state.identities, created);
+        } catch (e) {
+          throw new StageFailure({ stage: 'scenario', code: 'reference', message: e.message, label });
+        }
+        if (state.contract?.name !== call.contract) await selectContract(call.contract);
+        const meta = metaOf(state.contract.description, call);
+        // Map arguments back in canonical key order (new key hashes may sort differently); positions and roles as recorded.
+        const defs = state.contract.description.definitions;
+        for (const a of meta?.args ?? []) if (call.args && a.name in call.args) call.args[a.name] = recanonical(call.args[a.name], classify(a.schema, defs, 'args.' + a.name));
+        const cosigners = state.identities.filter((x) => (call.cosigners ?? []).includes(x.keyHash));
+        delete call.cosigners;
+        if (call.instance) state.instance = call.instance;
+        id = await call2({ ...call, address: signer.address }, meta, signer, cosigners, label);
+        outcome = 'confirmed';
+      } catch (e) {
+        outcome = outcomeOf(e);
+        record({ label, outcome: 'failed', stage: e.stage, code: e.code, message: e.message });
+      }
+      created.push(id);
+      const same = sameOutcome(outcome, st.expect);
+      results.push(same);
+      note(`${label}: ${same ? 'the same outcome' : `ANOTHER outcome (expected ${JSON.stringify(st.expect)}, got ${JSON.stringify(outcome)})`}`, same ? 'ok' : 'error');
+    }
+  } finally {
+    state.replaying = null;
+  }
+  // The replayed session's own record: its steps, as this session made them.
+  state.scenario = { steps: scenario.steps, created };
+  const same = results.filter(Boolean).length;
+  document.body.dataset.replay = `${same}/${results.length}`;
+  note(`scenario replayed: ${same} of ${results.length} call(s) with the same outcome`, same === results.length ? 'ok' : 'error');
+  await refresh();
 }
 
 function currentState() {

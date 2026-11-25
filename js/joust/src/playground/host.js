@@ -252,6 +252,10 @@ export function npmSource(root, { launch = launchNpmHost } = {}) {
       const fp = npmFingerprint(root);
       return {
         kind: 'npm', root: fp.root, digest: fp.digest, snapshot: fp.root,
+        // The runtime engine files the fingerprint covers, by hash: the server takes the shared verifiers' scripts from
+        // its loaded engine only when that engine is these bytes (ADR-0024 M4).
+        engineFiles: Object.fromEntries(['joust-runtime.js', 'joust-runtime.js.wasm'].map((f) =>
+          [f, hashFile(realpathSync(join(fp.root, 'node_modules/@julclang/joust-runtime/engine', f)))])),
         entries: JSON.parse(fp.contracts.toString('utf8')),
         stale() {
           try {
