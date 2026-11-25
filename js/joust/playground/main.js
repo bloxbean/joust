@@ -2,20 +2,29 @@
 // host's answers. It holds the identities' keys (in memory, for this page's life only: they are never sent anywhere),
 // checks every body itself before an identity signs it (D7), and asks the server to submit.
 //
+// Offline, the identities are fresh keys and every transaction settles at once. On DevKit (M3) they are test
+// identities over DevKit's public mnemonic, or a CIP-30 wallet connected through the Cardano Foundation's connector;
+// a submitted transaction is shown submitted, included and final as the chain settles it (I7).
+//
 // Every string from the project or the chain is rendered as text (textContent), never as HTML (D8).
 
-import { verifyPrepared, verifyPublication, publicationExpectation, parseTx, enterpriseAddress } from '@julclang/state-client';
-import { devWallet } from '@julclang/state-client/devwallet';
+import { verifyPrepared, verifyPublication, publicationExpectation, parseTx, enterpriseAddress, walletView, addressParts,
+  paymentKeyHash } from '@julclang/state-client';
+import { devWallet, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
+import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
 import { assemble } from '@julclang/state-client/ledger';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { classify, encode, render, unsupportedPaths, FormError } from './form.js';
-import { anchorsOf, checkCall as hostCheck, checkPublication } from './check.js';
+import { anchorsOf, checkCall as hostCheck, checkPublication, foreignPayerInput } from './check.js';
 
 const ADA = 1_000_000n;
 const FUND_ADA = 1000n;
 const MAX_FEE = 5n * ADA;
 const NAMES = ['Alice', 'Bob', 'Carol', 'Dave', 'Erin', 'Frank', 'Grace', 'Heidi'];
+const SETTLE_POLL_MS = 1000;
+/** Beyond the body's expiry and depth margin, how long the page waits for an inclusion before it shows a timeout. */
+const CONFIRMATION_GRACE_MS = 30_000;
 const $ = (id) => document.getElementById(id);
 
 // ---- the session token (D8): paired once with the single-use code of the link the command opened (its fragment, never
@@ -25,7 +34,7 @@ async function pair() {
   const m = /(?:^#|&)pair=([A-Za-z0-9_-]{32})(?:&|$)/.exec(location.hash);
   if (m) {
     history.replaceState(null, '', location.pathname);
-    // Relative, as the API: a page mounted under a base (joust dev's /playground/) pairs there.
+    // Relative: the page may be served under joust dev's /playground/ (its /playground/pair).
     const r = await fetch('pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: m[1] }) });
     const j = await r.json().catch(() => null);
     if (r.ok && typeof j?.result?.token === 'string') {
@@ -46,6 +55,7 @@ class StageFailure extends Error {
 /** The same failure, labelled with the call it belongs to (and its stage when the server named none). */
 const labelled = (e, stage, label) => new StageFailure({ ...e, message: e.message, stage: e.stage ?? stage, label });
 async function api(route, body = {}) {
+  // Relative: the page may be served under joust dev's /playground/.
   const r = await fetch('api/' + route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-joust-playground': TOKEN ?? '' },
     body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({ error: { stage: 'request', code: 'http', message: `HTTP ${r.status}` } }));
@@ -102,13 +112,32 @@ function snapToUtxo(u) {
     datumHash: u.data_hash ?? null, referenceScriptHash: u.reference_script_hash ?? null };
 }
 
+const devkit = () => state.session?.mode === 'devkit';
 function newIdentity(i) {
+  if (devkit()) {
+    // D5: DevKit's public test mnemonic, by index: test-only keys (anyone can derive them).
+    const index = (state.session.identityBase ?? 1) + i;
+    const wallet = devWallet({ chain: chainView, mnemonic: DEVKIT_MNEMONIC, index, networkId: 0 });
+    // As offline: the payment key's enterprise address, where the host pays (and spends from) the identity's key hash;
+    // the faucet tops that address up. (A CIP-30 wallet keeps its own change address.)
+    return { label: `${NAMES[i] ?? `Identity ${i + 1}`} (DevKit #${index})`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0),
+      keyHash: wallet.keyHash, testOnly: true };
+  }
   const mnemonic = generateMnemonic(wordlist, 256);
   const wallet = devWallet({ chain: chainView, mnemonic, networkId: 0 });
   // The identity's address is the enterprise address of its payment key: what the dev host pays an identity's key hash
   // to and spends from (protocol 1: enterprise wallet addresses on the session network), so a payout to it is its own
   // balance. The wallet signs with that payment key.
   return { label: NAMES[i] ?? `Identity ${i + 1}`, wallet, address: enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0), keyHash: wallet.keyHash };
+}
+/** Funds an identity: offline from nowhere; on DevKit from its faucet, when it holds less than 100 ADA. */
+async function fund(id) {
+  if (devkit()) {
+    const utxos = await chainView.utxosAt(id.address);
+    if (utxos.reduce((n, u) => n + (u.value.get('lovelace') ?? 0n), 0n) >= 100n * ADA) return;
+    note(`topping ${id.label} up from the DevKit faucet…`);
+  }
+  await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
 }
 
 // ---- log and history
@@ -128,7 +157,7 @@ async function startSession(opts = {}) {
   // least recently used ends first) retires abandoned ones.
   state.session = await api('sessions/new', opts);
   if (!state.identities.length) for (let i = 0; i < 3; i++) state.identities.push(newIdentity(i));
-  if (!opts.keepLedgerOf) for (const id of state.identities) await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
+  if (!opts.keepLedgerOf || devkit()) for (const id of state.identities) await fund(id);
   state.instance = null;
   // A new session may run a rebuilt project: its contracts are the new build's (a removed one is dropped).
   drawContracts();
@@ -137,7 +166,12 @@ async function startSession(opts = {}) {
     $('contract-title').textContent = 'Choose a contract';
     for (const id of ['operations', 'instances', 'objects']) $(id).replaceChildren();
   }
-  note(`session ${state.session.session} started (offline, build ${state.session.fingerprint.slice(0, 12)}…)`);
+  note(`session ${state.session.session} started (${state.session.mode}, build ${state.session.fingerprint.slice(0, 12)}…)`);
+  for (const p of state.session.pruned ?? []) {
+    note(`the journal of an earlier DevKit chain (started ${new Date(p.startTime * 1000).toISOString()}, ${p.transactions} `
+      + 'transaction(s)) was removed: that chain is gone', 'warn');
+  }
+  if (state.session.restored) note(`${state.session.restored} journaled transaction(s) restored: their settlement is followed again`);
   await refresh();
   if (state.contract) await selectContract(state.contract.name);
 }
@@ -153,6 +187,8 @@ async function refresh() {
 function drawBanner() {
   const s = state.session;
   const b = $('banner');
+  b.classList.toggle('devkit', s.mode === 'devkit');
+  if (s.mode === 'devkit') return drawDevkitBanner(s, b);
   fill(b,
     h('div', { class: 'mode' },
       h('strong', { text: 'OFFLINE' }), ' ',
@@ -207,6 +243,29 @@ function drawBanner() {
   );
 }
 
+// DevKit (M3): the node decides; time is the network's; the test identities are test-only.
+function drawDevkitBanner(s, b) {
+  b.replaceChildren(
+    h('div', { class: 'mode' },
+      h('strong', { text: 'DEVKIT' }), ' ',
+      h('span', { text: `${s.network.name} · network id ${s.network.networkId} · magic ${s.network.protocolMagic} · slot ${s.slot}`
+        + `${s.tip !== null ? ` (chain tip ${s.tip})` : ''} · build ${s.fingerprint.slice(0, 12)}…` })),
+    h('p', { class: 'meaning', text: 'Transactions go to the Yaci DevKit\'s node: its ledger rules and the scripts decide. A '
+      + `transaction is shown submitted, then included (in a block), then final ${s.settlementSlots} slots later. The test `
+      + 'identities use DevKit\'s public test mnemonic: anyone can derive their keys; never use them with real funds.' }),
+    h('div', { class: 'controls' },
+      h('button', { id: 'refresh', text: 'Refresh', onclick: () => guard(refresh) }),
+      h('button', { id: 'new-session', text: 'New session', onclick: () => guard(() => startSession()) })),
+    s.stale ? h('div', { class: 'stale', id: 'stale' },
+      h('strong', { text: 'The project was rebuilt.' }), ' This session runs the build it started with and prepares nothing more. ',
+      h('button', { text: 'New session on the new build', onclick: () => guard(() => startSession()) })) : null,
+    s.fenced ? h('div', { class: 'stale', id: 'fenced' }, h('strong', { text: 'The dev host disagrees with the chain' }),
+      ` (${s.fenced}). It prepares nothing more; what is shown is what the chain shows. `,
+      h('button', { text: 'New session', onclick: () => guard(() => startSession()) })) : null,
+    s.ended ? h('div', { class: 'stale', id: 'ended', text: `The session ended: ${s.ended}` }) : null,
+  );
+}
+
 async function drawIdentities() {
   const box = $('identities');
   const rows = [];
@@ -216,15 +275,79 @@ async function drawIdentities() {
     rows.push(h('li', { class: i === state.signer ? 'signer' : '', 'data-identity': id.label, 'data-key-hash': id.keyHash, 'data-lovelace': String(lovelace) },
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'signer', checked: i === state.signer, 'data-identity': id.label,
         onchange: () => { state.signer = i; drawIdentities(); drawOperations(); } }), ' ', h('strong', { text: id.label })),
+      id.testOnly ? h('span', { class: 'testonly', text: 'test-only' }) : null, id.cip30 ? h('span', { class: 'muted', text: ' CIP-30' }) : null,
       ' ', h('code', { text: id.address.slice(0, 24) + '…' }), ' ', h('span', { text: ada(lovelace) }),
       ' ', h('span', { class: 'muted', text: 'key hash ' + id.keyHash.slice(0, 10) + '…' })));
   }
+  const nextIndex = state.identities.filter((x) => !x.cip30).length;
   box.replaceChildren(h('ul', {}, rows), h('button', { text: '+ identity', onclick: () => guard(async () => {
-    const id = newIdentity(state.identities.length);
+    const id = newIdentity(nextIndex);
     state.identities.push(id);
-    await sapi('fund', { address: id.address, lovelace: String(FUND_ADA * ADA) });
+    await fund(id);
     await drawIdentities();
-  }) }), h('p', { class: 'muted', text: 'Simulation keys, in this page\'s memory only: never sent to the server, stored or exported.' }));
+  }) }), h('p', { class: 'muted', text: devkit()
+    ? 'Test identities: DevKit\'s public test mnemonic, derived in this page; the server only tops their addresses up.'
+    : 'Simulation keys, in this page\'s memory only: never sent to the server, stored or exported.' }));
+  drawWallets();
+}
+
+// ---- Connect wallet (DevKit only, D5): the Cardano Foundation's connector finds and enables a CIP-30 wallet; the
+// page's checks and the signing flow stay the playground's.
+function injectedWallets() {
+  const installed = new Set(Wallet.getInstalledWalletExtensions());
+  const found = Object.entries(window.cardano ?? {}).filter(([k, w]) => w && typeof w.enable === 'function'
+    && (installed.has(k.toLowerCase()) || typeof w.apiVersion === 'string'));
+  // Yano first (F18), then the others as the browser injected them.
+  const yano = ([k, w]) => /yano/i.test(k) || /yano/i.test(w.name ?? '');
+  return [...found.filter(yano), ...found.filter((x) => !yano(x))];
+}
+function drawWallets() {
+  const box = $('wallets');
+  if (!devkit()) return box.replaceChildren();
+  const list = injectedWallets();
+  // Redrawn on every refresh: the choice made stays chosen (the connect button reads the select).
+  const chosen = $('wallet-choice')?.value;
+  const sel = h('select', { id: 'wallet-choice', 'aria-label': 'CIP-30 wallet' },
+    list.map(([key, w]) => h('option', { value: key, text: `${w.name ?? key}${/yano/i.test(key) && !/yano/i.test(w.name ?? '') ? ' (Yano)' : ''}` })));
+  if (chosen && list.some(([key]) => key === chosen)) sel.value = chosen;
+  box.replaceChildren(h('div', { class: 'wallets' }, h('h4', { text: 'Connect wallet (CIP-30)' }),
+    list.length ? h('div', { class: 'controls' }, sel, h('button', { id: 'connect', text: 'Connect',
+      onclick: () => guard(() => connectWallet(sel.value)) }))
+      : h('p', { class: 'muted', text: 'No CIP-30 wallet found (Yano, Lace, Eternl, …). Point a wallet at this DevKit and reload, or use a test identity.' })));
+}
+const reason = (e) => e?.message ?? e?.info ?? (typeof e === 'object' ? JSON.stringify(e) : String(e));
+async function connectWallet(key) {
+  const w = window.cardano?.[key];
+  if (!w) throw new StageFailure({ stage: 'wallet', code: 'missing', message: `no wallet ${key}` });
+  const name = w.name ?? key;
+  note(`asking ${name} to connect (answer in the wallet)…`);
+  try {
+    // The connector enables the wallet (CIP-30 enable) and checks that it is on a testnet.
+    await new Promise((resolve, reject) => {
+      Wallet.connect(key, NetworkType.TESTNET, resolve, reject).catch(reject);
+    });
+  } catch (e) {
+    throw new StageFailure({ stage: 'wallet', code: 'connect', message: `${name} did not connect: ${reason(e)}` });
+  }
+  const api = await w.enable();
+  const view = await walletView(api);
+  // D5: the session's network only. Network id 0 does not tell a DevKit from a public testnet: a wallet following
+  // another chain offers outputs this DevKit does not have, and prepare fails.
+  const nets = view.addresses.map((a) => { try { return addressParts(a).networkId; } catch { return null; } });
+  if (view.networkId !== state.session.network.networkId || nets.some((n) => n !== state.session.network.networkId)) {
+    throw new StageFailure({ stage: 'wallet', code: 'network', message: `${name} is on network ${view.networkId}, this DevKit is `
+      + `${state.session.network.networkId}: switch the wallet to a testnet that follows this DevKit` });
+  }
+  const keyHash = paymentKeyHash(view.change);
+  if (!keyHash) throw new StageFailure({ stage: 'wallet', code: 'address', message: `${name}'s change address has no payment key` });
+  state.identities = state.identities.filter((x) => !(x.cip30 && x.key === key));
+  const id = { label: `${name}`, key, wallet: api, address: view.change, keyHash, cip30: true };
+  state.identities.push(id);
+  state.signer = state.identities.length - 1;
+  note(`${name} connected: ${view.change.slice(0, 24)}…`, 'ok');
+  await fund(id);   // a DevKit faucet top-up when it holds less than 100 ADA
+  await drawIdentities();
+  drawOperations();
 }
 
 // ---- contracts
@@ -563,7 +686,13 @@ async function prerequisites(signer) {
         throw new StageFailure({ stage: 'verification', code: 'refused', message: 'the page refused to sign the publication: ' + v.problems.join('; '), label });
       }
       Object.assign(report, host.report);
-      await reviewSignSubmit(r, label, signer, { publication: p, report });
+      try {
+        await reviewSignSubmit(r, label, signer, { publication: p, report });
+      } catch (e) {
+        // DevKit: the registration was there already (Yaci Store cannot tell); the host knows now: list them again.
+        if (e.code !== 'alreadyRegistered') throw e;
+        note(`${label}: already registered on the chain; the prerequisites are listed again`);
+      }
     } finally {
       if (!report.submitted) await sapi('discard', { reservation: r.prepared.reservation }).catch(() => {});
     }
@@ -579,36 +708,64 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
       try {
         // 5. sign (stage wallet), after the explicit approval
         let witnesses;
+        if (signer.cip30) {
+          // The wallet as it is now (#179 P2): still on this network, the same payer, and holding every input the body
+          // spends from it, as DevKit does. Then the handoff is recorded before the wallet sees the body: from here on
+          // it is never discarded (only its expiry releases its inputs, ADR-0022 D8).
+          await walletStillMatches(signer, r.prepared.cbor, label, { publication: !!publication });
+          try {
+            await sapi('handoff', { reservation: r.prepared.reservation });
+          } catch (e) {
+            throw labelled(e, 'wallet', label);
+          }
+          report.submitted = true;
+        }
         try {
-          witnesses = await signer.wallet.signTx(r.prepared.cbor);
+          // CIP-30 signTx(tx, partialSign): the wallet adds its own witnesses only.
+          witnesses = await signer.wallet.signTx(r.prepared.cbor, true);
         } catch (e) {
-          throw new StageFailure({ stage: 'wallet', code: 'sign', message: e.message, label });
+          // An identity's keys are in this page: its body went nowhere and is discarded on the way out.
+          throw new StageFailure({ stage: 'wallet', code: e?.code === 2 ? 'declined' : 'sign', message: reason(e), label });
         }
         const signed = assemble(r.prepared.cbor, witnesses);
-        // 6. submit (stage ledger), 7. settle: offline, at once
+        // 6. submit (stage ledger)
         let res;
         try {
           res = await sapi('submit', { reservation: r.prepared.reservation, cbor: signed.cbor });
         } catch (e) {
-          // A lost answer (the request may have reached the ledger): the session's history says whether it applied.
+          // A lost answer (the request may have reached the ledger or the node).
           if (!(e instanceof StageFailure) || e.code === 'http') {
             report.submitted = true;   // never released: it may be on the ledger
-            res = await reconcile(r.prepared.txHash);
-            if (!res) {
-              record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
-                message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
-              note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
-              reject(Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true }));
-              return;
+            if (devkit()) {
+              // DevKit: the server journaled the submission before sending it; the chain says whether it landed.
+              res = { txHash: r.prepared.txHash, status: 'submitted', transport: 'unknown', validTo: Number(parseTx(r.prepared.cbor).ttl),
+                settlementSlots: state.session.settlementSlots };
+            } else {
+              res = await reconcile(r.prepared.txHash);
+              if (!res) {
+                record({ label, outcome: 'outcome unknown', txHash: r.prepared.txHash, session: state.session.session,
+                  message: 'the submission\'s answer was lost and the session\'s history does not show it yet: recheck before trying again' });
+                note(`${label}: outcome unknown (${r.prepared.txHash.slice(0, 16)}…): check the history before trying again`, 'warn');
+                reject(Object.assign(new StageFailure({ stage: 'ledger', code: 'unknown', message: 'outcome unknown', label }), { quiet: true }));
+                return;
+              }
             }
           } else {
-            // Not marked submitted: the page discards the reservation on its way out. A ledger refusal was discarded by
-            // the server already (that discard then fails harmlessly); any other failure (another body, a host that
-            // ended, a malformed transaction) must not leave the instance pending.
+            // Offline: not marked submitted, so the page discards the reservation on its way out. A ledger refusal was
+            // discarded by the server already (that discard then fails harmlessly); any other failure (another body, a
+            // host that ended, a malformed transaction) must not leave the instance pending.
+            // DevKit: a body the node refused was handed out (ADR-0022 D8): never discarded, its expiry releases its
+            // inputs (the server refuses that discard as well). A failure before the node saw it is still released.
+            if (devkit() && (e.code === 'nodeRefused' || e.code === 'alreadyRegistered')) report.submitted = true;
             throw labelled(e, 'ledger', label);
           }
         }
         report.submitted = true;
+        // 7. settle: on DevKit as the chain settles it (I7); offline at once
+        if (devkit()) {
+          resolve(await settlement(res, label));
+          return;
+        }
         record({ label, outcome: 'confirmed', txHash: res.txHash, slot: res.slot, attacks: res.attacks, accepted: res.acceptedAttacks });
         confirmedNotes(label, res);
         await refresh();
@@ -660,6 +817,102 @@ function reviewSignSubmit(r, label, signer, { predicted, request, publication, r
     panel.scrollIntoView({ block: 'nearest' });
   });
 }
+/**
+ * A CIP-30 wallet just before it signs (#179 P2): its network, its change address (the payer the body was built and
+ * checked for) and its UTxOs, read again; every input and collateral input the body takes from the payer's address
+ * must be one the wallet holds and DevKit shows unspent.
+ */
+async function walletStillMatches(signer, cbor, label, { publication = false } = {}) {
+  const refuse = (message) => new StageFailure({ stage: 'wallet', code: 'walletChanged', message, label });
+  // Every read, the retries' too (#179 r3): the same network and the same change address (the payer) as connected.
+  const read = async () => {
+    let v;
+    try {
+      v = await walletView(signer.wallet);
+    } catch (e) {
+      throw refuse(`the wallet could not be read: ${reason(e)}`);
+    }
+    if (v.networkId !== state.session.network.networkId) throw refuse(`the wallet is now on network ${v.networkId}: connect the wallet again`);
+    if (v.change !== signer.address) throw refuse('the wallet\'s change address changed since it was connected: connect the wallet again');
+    return v;
+  };
+  let view = await read();
+  const tx = parseTx(cbor);
+  const refs = [...new Set([...tx.inputs, ...tx.collateral].map((i) => (typeof i === 'string' ? i : i.ref ?? `${i.txHash}#${i.index}`)))];
+  const { outputs } = await resolveInputs(cbor);
+  // #179 r2: every input and collateral input must resolve on the chain before it is classified by address.
+  const missing = refs.find((ref) => !outputs.has(ref));
+  if (missing) throw refuse(`DevKit does not show the input ${missing} the body spends: prepare the call again`);
+  // The change address is the payer, and only it (final pass): an input at another address of the wallet's key, or, in
+  // a publication (all of its inputs are the wallet's), any input elsewhere, is refused before the wallet sees it.
+  const foreign = foreignPayerInput(refs, (ref) => outputs.get(ref).address, { payer: signer.address, keyHash: signer.keyHash, publication });
+  if (foreign) {
+    throw refuse(`the body spends ${foreign.ref} at ${foreign.at.slice(0, 24)}…, not the wallet's connected address: prepare the call again`);
+  }
+  const payer = refs.filter((ref) => outputs.get(ref).address === signer.address);
+  const chainUnspent = new Set((await chainView.utxosAt(signer.address)).map((u) => u.ref));
+  for (const ref of payer) if (!chainUnspent.has(ref)) throw refuse(`DevKit does not show the input ${ref} unspent: prepare the call again`);
+  // D-6: a wallet indexes new outputs a moment after DevKit does: read it again for a few seconds before refusing.
+  for (let attempt = 0; ; attempt++) {
+    const absent = payer.find((ref) => !view.utxos.has(ref));
+    if (!absent) return;
+    if (attempt >= 4) throw refuse(`the wallet does not hold the input ${absent} the body spends (does it follow this DevKit?)`);
+    await new Promise((ok) => setTimeout(ok, 1000));
+    view = await read();
+  }
+}
+
+/**
+ * DevKit (D7 step 7): follows a submitted transaction until it is included (the call then resolves and state is read
+ * again), then on to final in the background. Never shown as confirmed before the chain reported it included (I7);
+ * expiry, or no inclusion within the window, fails at stage confirmation.
+ */
+async function settlement(res, label) {
+  const entry = { label, outcome: 'submitted', txHash: res.txHash };
+  state.history.unshift({ at: state.session?.slot ?? null, ...entry });
+  const update = (patch) => {
+    const e = state.history.find((x) => x.txHash === res.txHash);
+    if (e) Object.assign(e, patch);
+    drawHistory();
+  };
+  drawHistory();
+  note(`${label}: submitted (${res.txHash.slice(0, 16)}…), waiting for a block`);
+  const slotMs = state.session.clock.slotLengthMs;
+  const deadline = Date.now() + Math.max(0, res.validTo + res.settlementSlots - state.session.slot) * slotMs + CONFIRMATION_GRACE_MS;
+  const poll = async (until) => {
+    for (;;) {
+      const st = await sapi('tx', { txHash: res.txHash });
+      if (until(st)) return st;
+      if (st.status === 'expired') {
+        update({ outcome: 'expired', stage: 'confirmation', code: 'expired' });
+        throw new StageFailure({ stage: 'confirmation', code: 'expired', message: 'the transaction expired without being included', label });
+      }
+      if (st.status === 'rolledBack') update({ outcome: 'rolled back: waiting to be included again' });
+      if (Date.now() > deadline) {
+        update({ outcome: 'not confirmed', stage: 'confirmation', code: 'timeout' });
+        throw new StageFailure({ stage: 'confirmation', code: 'timeout', label,
+          message: 'no inclusion was observed in time: it is not confirmed (the playground keeps following it)' });
+      }
+      await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+    }
+  };
+  const included = await poll((st) => st.status === 'included' || st.status === 'final');
+  update({ outcome: `included in slot ${included.slot}`, slot: included.slot });
+  note(`${label}: included in slot ${included.slot} (not final yet)`, 'ok');
+  await refresh();
+  // On to final, without holding the page.
+  poll((st) => st.status === 'final').then((st) => {
+    update({ outcome: 'final', slot: st.slot });
+    note(`${label}: final (slot ${st.slot})`, 'ok');
+  }, (e) => note(`${label}: ${e.message}`, 'error'));
+  return { ...res, slot: included.slot };
+}
+
+function currentState() {
+  const li = [...document.querySelectorAll('#instances li.selected pre')];
+  return li.length ? li[0].textContent : '(none)';
+}
+
 /** The session's record of a transaction the page submitted, as the submit route answers; null if it has none. */
 async function reconcile(txHash, session = state.session.session, tries = 3) {
   for (let i = 0; i < tries; i++) {
@@ -694,7 +947,10 @@ async function recheck(entry) {
 }
 
 function drawHistory() {
-  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: e.outcome === 'confirmed' ? 'ok' : e.outcome === 'declined' ? '' : e.outcome === 'outcome unknown' ? 'warn' : 'error' },
+  const good = (o) => o === 'confirmed' || o === 'final' || /^included/.test(o ?? '');
+  const pending = (o) => o === 'submitted' || o === 'declined' || /^rolled back/.test(o ?? '');
+  $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? ''
+    : e.outcome === 'outcome unknown' ? 'warn' : 'error', 'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
     h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
     e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
@@ -713,6 +969,11 @@ async function guard(fn) {
   try {
     await fn();
   } catch (e) {
+    if (e.code === 'replaced') {
+      // D-4: another tab started a DevKit session; this one is closed.
+      $('banner').replaceChildren(h('div', { class: 'stale', id: 'replaced', text: e.message }));
+      return;
+    }
     if (!e.quiet) {
       const notModelled = e.code === 'NotModelled' || e.notModelled;
       const message = notModelled ? `not modelled offline: try DevKit (${e.message})` : e.message;
@@ -740,4 +1001,10 @@ async function guard(fn) {
     drawContracts();
     document.body.dataset.ready = 'true';
   });
+  if (devkit()) {
+    // CIP-30 wallets inject themselves after load, some late: the connector watches for them.
+    Wallet.addEventListener('installedWalletExtensions', () => drawWallets());
+    Wallet.startInjectWalletListener();
+    for (const ms of [300, 1000, 2500]) setTimeout(drawWallets, ms);
+  }
 })();

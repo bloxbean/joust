@@ -34,7 +34,7 @@ const COMMANDS = {
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
-  playground: 'playground [--mode offline] [--port <port>] [--accept-abi] [--accept-lock] [--no-open]   build, then a browser playground for every contract: identities, forms, offline ledger (ADR-0024); in a Gradle project: ./gradlew build joustHostSpec and the JVM dev host',
+  playground: 'playground [--mode offline|devkit] [--network <name>] [--port <port>] [--accept-abi] [--accept-lock] [--no-open]   build, then a browser playground for every contract: identities, forms, an offline ledger or Yaci DevKit (ADR-0024); in a Gradle project: ./gradlew build joustHostSpec and the JVM dev host',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
   version: 'version                     this joust\'s version',
   help: 'help [<command>]            this help',
@@ -207,10 +207,11 @@ async function project() {
       const stop = async () => { await d.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
       return undefined;   // keeps running
     }
     case 'playground': {
-      // ADR-0024 D3: offline by default; it never attaches to or starts a network.
+      // ADR-0024 D3: offline by default (it never attaches to or starts a network); --mode devkit on a Yaci DevKit only.
       const { playground } = await import('../src/playground/index.js');
       let p;
       try {
@@ -224,6 +225,7 @@ async function project() {
       const stop = async () => { await p.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
       return undefined;   // keeps running
     }
     case 'test': {

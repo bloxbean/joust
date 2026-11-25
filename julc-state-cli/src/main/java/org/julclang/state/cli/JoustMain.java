@@ -35,7 +35,7 @@ public final class JoustMain {
         COMMANDS.put("deploy", "deploy      npm: publish the reference scripts to a network (--network <name>)");
         COMMANDS.put("dev", "dev         npm: attach to a network, build, deploy, rebuild on save, serve the page");
         COMMANDS.put("serve", "serve       npm: serve a built page with the chain API proxied");
-        COMMANDS.put("playground", "playground  a browser playground, offline: npm and Gradle (Gradle: Node.js 22+, ./gradlew build joustHostSpec)");
+        COMMANDS.put("playground", "playground  a browser playground, offline or on Yaci DevKit (--mode devkit): npm and Gradle (Gradle: Node.js 22+, ./gradlew build joustHostSpec)");
         COMMANDS.put("version", "version     this joust's version, and the npm project's @julclang/joust");
         COMMANDS.put("help", "help [cmd]  this help");
     }

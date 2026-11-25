@@ -47,3 +47,7 @@ label.inline { display: inline; font-weight: normal; }
 .stage { color: var(--err); }
 .msg { font-size: 12px; }
 .sep { width: 12px; }
+.banner.devkit .mode strong { background: var(--ok); }
+.testonly { font-size: 11px; padding: 0 4px; border-radius: 3px; border: 1px solid var(--warn); color: var(--warn); }
+.wallets { margin-top: 8px; }
+.wallets select { max-width: 100%; }

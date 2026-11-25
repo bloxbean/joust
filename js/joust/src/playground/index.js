@@ -1,29 +1,46 @@
 // joust playground (ADR-0024 D3): builds the project through the existing gates, starts the playground server and
-// opens its page. Offline is the default (and, in this milestone, the only mode): it never attaches to or starts a
-// network.
+// opens its page. Offline is the default: it never attaches to or starts a network. `--mode devkit` attaches to the
+// configured development network as joust dev does (a Yaci DevKit only: devkit.js, I4).
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from '../build.js';
+import { attach } from '../dev.js';
 import { pageFiles } from './page.js';
 import { gradleBuild, gradleSource, isGradleProject, readSpecBytes, runGradle } from './gradle.js';
 
 /**
+ * DevKit mode's session options from joust.config.json's "playground": the validity window (ttlMs, default 60 s) and
+ * the DevKit mnemonic's first account index for the test identities (identityBase, default 1).
+ */
+export function devkitOptions(config, net) {
+  const base = config.playground?.identityBase;
+  if (base !== undefined && !(Number.isSafeInteger(base) && base >= 0 && base < 2 ** 31 - 64)) {
+    throw new Error('joust.config.json: playground.identityBase is an account index');
+  }
+  // No ttlMs: the session's own default (devkit.js's DEFAULT_TTL_MS), so this module loads devkit.js only in DevKit mode.
+  const ttlMs = config.playground?.ttlMs;
+  return { net, ttlSlots: ttlMs === undefined ? undefined : Math.max(1, Math.ceil(ttlMs / net.clock.slotLengthMs)), identityBase: base };
+}
+
+/**
  * @param o.config     joust.config.json (loadConfig())
- * @param o.mode       'offline' (default); 'devkit' arrives with M3
+ * @param o.mode       'offline' (default) or 'devkit'
+ * @param o.networkName DevKit mode's network (default: the config's network)
  * In a Gradle project (a build file at root, no package.json) the build runs through ./gradlew (see gradlePlayground).
  * @param o.acceptAbi  as joust build: never accepted unless given (I10)
  * @param o.open       open the page in the default browser (default true)
  */
 export async function playground({ config, root = process.cwd(), mode = 'offline', networkName, port, acceptAbi = false,
   acceptLock = false, open = true, log = console.log } = {}) {
-  if (mode !== 'offline' || networkName) {
-    throw new Error('joust playground: only --mode offline is available in this version (DevKit mode comes with ADR-0024 M3)');
-  }
-  if (isGradleProject(root)) return gradlePlayground({ root, port, acceptAbi, acceptLock, open, log });
+  if (mode !== 'offline' && mode !== 'devkit') throw new Error(`joust playground: no mode ${mode} (offline or devkit)`);
+  if (mode === 'offline' && networkName) throw new Error('joust playground: --network needs --mode devkit (offline uses no network)');
+  const net = mode === 'devkit' ? await devkitNetwork(config, networkName, log) : null;
+  if (isGradleProject(root)) return gradlePlayground({ root, config, port, acceptAbi, acceptLock, open, log, mode, net });
   if (resolve(root, config.out) !== resolve(root, 'build/joust')) {
     throw new Error(`joust playground: the dev host reads build/joust; this project builds into ${config.out}`);
   }
@@ -32,9 +49,28 @@ export async function playground({ config, root = process.cwd(), mode = 'offline
   if (!r.ok) throw new Error('joust playground: the build failed (see above)');
   // Loaded only now: the server's offline ledger needs this package's own dependencies, which a refusal above (a
   // Gradle build without its wrapper, a failed build) must not.
-  const [{ loadEngine }, { startPlayground }] = await Promise.all([import('@julclang/joust-runtime'), import('./server.js')]);
-  const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
-  return announce((o) => startPlayground({ root, engine, page, port: port ?? 0, log, ...o }), { open, log, mode: 'offline' });
+  const { startPlayground } = await import('./server.js');
+  const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
+  const page = await pageFiles();
+  return announce((o) => startPlayground({ root, engine, page, port: port ?? 0, log, mode,
+    devkit: net ? devkitOptions(config, net) : {}, ...o }), { open, log, mode });
+}
+
+/** DevKit mode's network (I4): checked before anything is attached or built, then attached as joust dev does. */
+async function devkitNetwork(config, networkName, log) {
+  const name = networkName ?? config.network;
+  const { checkDevkitNetwork, devkitIdentity, sameChain, yaciChain } = await import('./devkit.js');
+  checkDevkitNetwork(config.networks?.[name], name);
+  const net = await attach(config, name, { log });
+  // D-1, M3-S1: the chain API must serve the admin API's chain (a public network's API behind a DevKit admin fails).
+  const identity = await devkitIdentity(net.admin);
+  const g = await yaciChain(net).genesis().catch((e) => { throw new Error(`joust playground: ${net.chain}/genesis: ${e.message}`); });
+  if (!sameChain(identity, g)) {
+    throw new Error(`joust playground: ${name}'s chain API (${net.chain}) serves another chain (magic ${g.networkMagic}) than its DevKit`
+      + ` admin API (magic ${identity.protocolMagic}, start ${identity.startTime})`);
+  }
+  log(`attached to ${name} (${net.chain}, admin ${net.admin}, magic ${identity.protocolMagic})`);
+  return net;
 }
 
 /**
@@ -80,7 +116,7 @@ export async function announce(start, { open, log, mode, spawnOpener = spawn }) 
  * check before compileJava), then the server over the JVM host's verified snapshot. The ABI and lock flags are the
  * npm toolchain's: in Gradle a change is accepted with the build's own tasks, never by the playground (I10).
  */
-async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }) {
+async function gradlePlayground({ root, config, port, acceptAbi, acceptLock, open, log, mode = 'offline', net = null }) {
   if (acceptAbi || acceptLock) {
     throw new Error('joust playground: in a Gradle build, accept an ABI or lock change with ./gradlew acceptJscAbi or'
       + ' ./gradlew acceptJoustLock (and commit it); the playground never accepts one');
@@ -94,10 +130,11 @@ async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }
   }
   // The spec this gated build wrote: the first session runs it, or builds again (gates included) if it changed since.
   const source = gradleSource(build.project, { log, gatedSpec: readSpecBytes(build.project) });
-  const [{ loadEngine }, { startPlayground }] = await Promise.all([import('@julclang/joust-runtime'), import('./server.js')]);
-  const [engine, page] = await Promise.all([loadEngine(), pageFiles()]);
-  return announce((o) => startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, ...o }),
-    { open, log, mode: 'offline, Gradle' });
+  const { startPlayground } = await import('./server.js');
+  const engine = mode === 'offline' ? await (await import('@julclang/joust-runtime')).loadEngine() : null;
+  const page = await pageFiles();
+  return announce((o) => startPlayground({ root: build.project, engine, page, port: port ?? 0, log, source, mode,
+    devkit: net ? devkitOptions(config, net) : {}, ...o }), { open, log, mode: `${mode}, Gradle` });
 }
 
 /**
@@ -106,12 +143,18 @@ async function gradlePlayground({ root, port, acceptAbi, acceptLock, open, log }
  */
 export function writeLauncher(url) {
   const dir = mkdtempSync(join(tmpdir(), 'joust-playground-'));
+  const page = (u) => `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>joust playground</title>`
+    + `<script>location.replace(${JSON.stringify(u).replace(/</g, '\\u003c')})</script>`;
   try {
     const file = join(dir, 'open.html');
-    const target = JSON.stringify(url).replace(/</g, '\\u003c');
-    writeFileSync(file, `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>joust playground</title>`
-      + `<script>location.replace(${target})</script>`, { mode: 0o600 });
-    return { file, link: pathToFileURL(file).href, remove: () => rmSync(dir, { recursive: true, force: true }) };
+    writeFileSync(file, page(url), { mode: 0o600 });
+    return { file, link: pathToFileURL(file).href, remove: () => rmSync(dir, { recursive: true, force: true }),
+      /** The same file (0600), now forwarding to {@code u}: a fresh pairing link (FD2). */
+      rewrite(u) {
+        const tmp = join(dir, `open.${randomBytes(6).toString('hex')}.tmp`);
+        writeFileSync(tmp, page(u), { mode: 0o600, flag: 'wx' });
+        renameSync(tmp, file);
+      } };
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });
     throw e;

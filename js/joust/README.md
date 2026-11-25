@@ -58,12 +58,13 @@ least 8 MB; `buildInWorker` provides one. On Node 22 the engines turn on Wasm ex
 ```sh
 npx joust playground                 # build, then open the playground (offline: an in-memory ledger, no node)
 npx joust playground --no-open --port 5180
+npx joust playground --mode devkit   # the same page on Yaci DevKit: test identities, Connect wallet (CIP-30)
 ```
 
 A generated page for every contract the project builds, Java or `.jsc`, with no page or client code to write
 (ADR-0024). It runs **offline**: an in-memory ledger (`@julclang/joust/test`'s) that checks the node's phase-1 rules it
 models and evaluates the scripts with JuLC's VM, with the attack suite on every script transaction (a toggle in the
-banner). It never attaches to or starts a network. DevKit mode and Connect wallet come in a later milestone.
+banner). It never attaches to or starts a network. `--mode devkit` runs the same page on a Yaci DevKit (below).
 
 The same command works in a **Gradle project** (ADR-0024 M2): with the native `joust`, `joust playground` in a Gradle
 build runs `./gradlew build joustHostSpec` (the build's own gates: `checkJscAbi`, the lock check; the playground never
@@ -121,6 +122,54 @@ and Values, and an asset offer for calls that take assets (`<policy>.<asset name
 (untyped Plutus data, other map keys) is shown as UNSUPPORTED with the argument's path. Calls the dev host refuses
 (`keyed`, `params`, `authorizedBy`, `unverifiable`), keyed contracts, `@Quorum` co-signing and calls that need a shared
 verifier (sends, MerkleMaps) are shown disabled.
+
+### DevKit mode
+
+```sh
+npx joust playground --mode devkit [--network devkit]   # the network: joust.config.json's (default "devkit")
+joust playground --mode devkit                          # a Gradle project, with the native joust (as offline)
+npx joust dev                                           # also serves it at /playground/ on a DevKit network
+```
+
+The same page and the same dev host, on a Yaci DevKit with Yaci Store (`yaci-devkit up --enable-yaci-store`).
+`joust playground --mode devkit` attaches as `joust dev` does (starting the network's `start` command when it is not
+running). Only a DevKit is accepted: a network with an `admin` API and network id 0, read through Yaci Store's API, whose
+genesis (magic and start time) must be the admin API's (a public network's chain API behind a DevKit admin API is
+refused; so are the public networks' magics).
+Mainnet can never be selected, and public testnets are not supported in this version. Gradle projects work the same way,
+over the JVM dev host. `joust dev` on a DevKit also serves the playground at `/playground/`, beside the project's own page
+(which it never replaces): it names a private file to open, which forwards the browser there with the run's token (no
+log line carries the token), and the playground keeps its own token, `Host` and `Origin` checks and sends no CORS headers.
+
+- **Identities.** Alice, Bob and Carol are DevKit test identities: accounts 1, 2 and 3 of DevKit's public test
+  mnemonic, derived in the page and labelled *test-only* (anyone can derive their keys: never use them with real
+  funds). The server tops each one up from DevKit's faucet (the admin API's, nothing else) when it holds less than
+  100 ADA; it learns only the addresses. `joust.config.json`'s `"playground": { "identityBase": 100 }` moves them to other accounts.
+- **Connect wallet.** The page lists the browser's CIP-30 wallets (Yano first) through the Cardano Foundation's
+  connector (`@cardano-foundation/cardano-connect-with-wallet-core`) and enables the chosen one for a testnet. A wallet
+  on another network is refused. Point the wallet at this DevKit; a wallet that follows another testnet offers outputs
+  the DevKit does not have, so its calls fail at `prepare`. The wallet's **change address** is the payer: calls spend
+  only its outputs and return change to it (the page's check requires change at exactly that address), so funds at the
+  wallet's other addresses are not used; on connect the faucet tops the change address up when it holds less than
+  100 ADA. The wallet signs only after the page's own checks and your approval, as the test identities do; a body
+  handed to a wallet is never discarded, even when the wallet declines (its inputs return when it expires).
+- **Settlement.** A transaction is shown *submitted*, then *included* (in a block, with its slot: the state is read
+  again), then *final* once the chain is 10 slots past it, as Yaci Store shows it at one chain point; the dev host is
+  told each step, and a host whose answer disagrees with the chain is fenced (it prepares nothing more: start a new
+  session). A DevKit reset (a new genesis, or a tip that goes back) ends the session. The node's refusal is shown at stage `ledger`; a transaction
+  never included before its validity ends (60 s by default, `"playground": { "ttlMs": … }`) at stage `confirmation`.
+  Neither is shown as confirmed.
+- **The journal.** Before the page can sign a transaction, the playground records it (and, before a CIP-30 wallet sees
+  it, that the wallet has it: it is then never discarded), and the latest slot its settlement can take, in `~/.joust/state/` (`JOUST_STATE_DIR` overrides it; private files, never in the project). A
+  playground started again follows what the last one left. The journal is kept per project and per DevKit chain (its
+  protocol magic and genesis start time): a reset DevKit starts empty, and the journal of the chain it replaced is
+  reported once and removed. One playground at a time per project and DevKit (a lock); one session per playground (a
+  second tab takes it over, and the first is told so). A journal that is missing or invalid while its high-water mark
+  exists is lost history: the next session waits until the chain passes that mark, as it does when the DevKit's chain
+  is found below the point where settled transactions left the journal. A lock left by a playground that stopped is
+  never taken over: the playground names it and says how to remove it (as git does with `index.lock`).
+- No time travel (the chain's clock is the DevKit's), no ledger reset (**New session** starts a new dev host on the same
+  chain) and no attack suite (the node checks every transaction).
 
 ## `joust dev`
 
