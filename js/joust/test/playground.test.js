@@ -858,8 +858,9 @@ describe('ADR-0024 M1: a payout to Bob\'s key hash is Bob\'s to spend (Chromium,
     for (const who of ['Alice', 'Bob']) {
       const keyHash = await page.locator(`#identities li[data-identity=${who}]`).getAttribute('data-key-hash');
       const { enterpriseAddress } = await import('@julclang/state-client');
-      const shown = await page.locator(`#identities li[data-identity=${who}] code`).innerText();
-      assert.ok(enterpriseAddress({ type: 'key', hash: keyHash }, 0).startsWith(shown.replace('…', '')), who);
+      // The address is shown short (head…tail); its title and copy button carry the whole of it.
+      const shown = await page.locator(`#identities li[data-identity=${who}] code`).getAttribute('title');
+      assert.equal(shown, enterpriseAddress({ type: 'key', hash: keyHash }, 0), who);
     }
     await page.click(`[data-contract="${ESCROW}"]`);
     await page.waitForSelector('[data-call="init:open"] button.run');

@@ -89,6 +89,37 @@ function h(tag, props = {}, ...kids) {
   return e;
 }
 const show = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x), 2);
+/** A long hex or address shortened for display (head…tail); the full value stays in the title and the copy button. */
+const short = (v, head = 10, tail = 8) => (typeof v === 'string' && v.length > head + tail + 1 ? `${v.slice(0, head)}…${v.slice(-tail)}` : String(v ?? ''));
+/** A value shown short, with a button that copies the whole of it. */
+function copyable(value, { head, tail, label = 'Copy' } = {}) {
+  const btn = h('button', { type: 'button', class: 'copy-btn', title: `${label}: ${value}`, 'aria-label': `${label} ${value}`, text: 'copy',
+    onclick: async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(value);
+        btn.textContent = 'copied';
+        btn.classList.add('done');
+        setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('done'); }, 1200);
+      } catch { /* no clipboard: the title shows the value */ }
+    } });
+  return h('span', { class: 'copy' }, h('code', { title: value, text: short(value, head, tail) }), btn);
+}
+const chip = (name, ...value) => h('span', { class: 'chip' }, h('b', { text: name }), ...value);
+
+// ---- the theme: the system's, unless the toggle chose (a per-browser convenience; nothing depends on it)
+(() => {
+  const root = document.documentElement;
+  try {
+    const t = localStorage.getItem('joust-playground-theme');
+    if (t === 'light' || t === 'dark') root.dataset.theme = t;
+  } catch { /* storage blocked: follow the system */ }
+  document.getElementById('theme')?.addEventListener('click', () => {
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('joust-playground-theme', root.dataset.theme); } catch { /* not kept */ }
+  });
+})();
 const ada = (lovelace) => {
   const l = BigInt(lovelace);
   const a = l < 0n ? -l : l;
@@ -260,7 +291,7 @@ async function fund(id) {
 // ---- log and history
 function note(text, kind = 'info') {
   const log = $('log');
-  log.prepend(h('div', { class: 'note ' + kind, text: `[slot ${state.session?.slot ?? '-'}] ${text}` }));
+  log.prepend(h('div', { class: 'note ' + kind }, h('span', { class: 'slot', text: `[slot ${state.session?.slot ?? '-'}]` }), ` ${text}`));
 }
 function record(entry) {
   state.history.unshift({ at: state.session?.slot ?? null, ...entry });
@@ -311,9 +342,11 @@ function drawBanner() {
   b.classList.toggle('devkit', s.mode === 'devkit');
   if (s.mode === 'devkit') return drawDevkitBanner(s, b);
   fill(b,
-    h('div', { class: 'mode' },
-      h('strong', { text: 'OFFLINE' }), ' ',
-      h('span', { text: `in-memory ledger · network id ${s.network.networkId} · slot ${s.slot} · build ${s.fingerprint.slice(0, 12)}…` })),
+    h('div', { class: 'status-row' },
+      h('span', { class: 'mode' }, h('span', { class: 'live' }), h('strong', { text: 'OFFLINE' })), ' ',
+      h('span', { class: 'chip' }, 'in-memory ledger'), ' ',
+      chip('network id', String(s.network.networkId)), ' ', chip('slot', String(s.slot)), ' ',
+      chip('build', h('code', { title: s.fingerprint, text: `${s.fingerprint.slice(0, 12)}…` }))),
     h('p', { class: 'meaning', text: 'Offline success means: the dev host built the transaction with this project\'s own JOUST, this page\'s checks '
       + 'passed, the in-memory ledger\'s modelled phase-1 rules passed, and the scripts accepted it under JuLC\'s VM. '
       + 'It is not a node\'s acceptance and not a proof.' }),
@@ -328,7 +361,7 @@ function drawBanner() {
         h('li', { text: 'Does not model: rewards (withdrawals take 0), PlutusV1\'s integrity hash, collateral loss on a phase-2 '
           + 'failure, rollbacks.' }))),
     h('div', { class: 'controls' },
-      h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 'attacks', checked: s.attacks, onchange: (e) => (state.busy ? drawBanner() : guard(async () => {
+      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', id: 'attacks', checked: s.attacks, onchange: (e) => (state.busy ? drawBanner() : guard(async () => {
         try {
           state.session = await sapi('session/attacks', { enabled: e.target.checked });
           note(`attack suite ${state.session.attacks ? 'on' : 'off'}`);
@@ -337,7 +370,7 @@ function drawBanner() {
         }
       })) }), ' attack suite on every script transaction'),
       h('span', { class: 'sep' }),
-      h('input', { type: 'text', id: 'advance-seconds', value: '60', size: 6, 'aria-label': 'seconds' }),
+      h('span', { class: 'stepper' }, h('input', { type: 'text', id: 'advance-seconds', value: '60', size: 6, 'aria-label': 'seconds' }),
       h('button', { id: 'advance', text: 'Advance time (s)', onclick: () => guard(async () => {
         const secs = Number($('advance-seconds').value);
         if (!Number.isSafeInteger(secs) || secs <= 0) throw new StageFailure({ stage: 'arguments', message: 'seconds: a positive integer' });
@@ -346,12 +379,12 @@ function drawBanner() {
         state.scenario.created.push(null);
         note(`time advanced ${secs} s: slot ${r.slot}`);
         await refresh();
-      }) }),
-      h('span', { class: 'sep' }),
+      }) })),
+      h('span', { class: 'grow' }),
       h('button', { id: 'export-scenario', text: 'Export scenario', disabled: !!state.scenario?.keptLedger,
         title: state.scenario?.keptLedger ? 'this session kept an earlier ledger: its scenario would miss the calls that made it'
           : 'the calls so far, as data: no keys, no transaction bytes', onclick: () => guard(exportCurrent) }),
-      h('label', { class: 'inline button', title: 'replay a scenario in a fresh offline session, with new identities' }, 'Import scenario ',
+      h('label', { class: 'button', title: 'replay a scenario in a fresh offline session, with new identities' }, 'Import scenario ',
         h('input', { type: 'file', id: 'import-scenario', accept: 'application/json,.json', onchange: (e) => {
           const f = e.target.files?.[0];
           e.target.value = '';
@@ -383,14 +416,17 @@ function drawBanner() {
 // DevKit (M3): the node decides; time is the network's; the test identities are test-only.
 function drawDevkitBanner(s, b) {
   b.replaceChildren(
-    h('div', { class: 'mode' },
-      h('strong', { text: 'DEVKIT' }), ' ',
-      h('span', { text: `${s.network.name} · network id ${s.network.networkId} · magic ${s.network.protocolMagic} · slot ${s.slot}`
-        + `${s.tip !== null ? ` (chain tip ${s.tip})` : ''} · build ${s.fingerprint.slice(0, 12)}…` })),
+    h('div', { class: 'status-row' },
+      h('span', { class: 'mode' }, h('span', { class: 'live' }), h('strong', { text: 'DEVKIT' })), ' ',
+      h('span', { class: 'chip' }, s.network.name), ' ', chip('network id', String(s.network.networkId)), ' ',
+      chip('magic', String(s.network.protocolMagic)), ' ',
+      chip('slot', `${s.slot}${s.tip !== null ? ` (chain tip ${s.tip})` : ''}`), ' ',
+      chip('build', h('code', { title: s.fingerprint, text: `${s.fingerprint.slice(0, 12)}…` }))),
     h('p', { class: 'meaning', text: 'Transactions go to the Yaci DevKit\'s node: its ledger rules and the scripts decide. A '
       + `transaction is shown submitted, then included (in a block), then final ${s.settlementSlots} slots later. The test `
       + 'identities use DevKit\'s public test mnemonic: anyone can derive their keys; never use them with real funds.' }),
     h('div', { class: 'controls' },
+      h('span', { class: 'grow' }),
       h('button', { id: 'refresh', text: 'Refresh', onclick: () => guard(refresh) }),
       h('button', { id: 'new-session', text: 'New session', onclick: () => guard(() => startSession()) })),
     s.stale ? h('div', { class: 'stale', id: 'stale' },
@@ -410,21 +446,25 @@ async function drawIdentities() {
     const utxos = await chainView.utxosAt(id.address).catch(() => []);
     const lovelace = utxos.reduce((n, u) => n + (u.value.get('lovelace') ?? 0n), 0n);
     rows.push(h('li', { class: i === state.signer ? 'signer' : '', 'data-identity': id.label, 'data-key-hash': id.keyHash, 'data-lovelace': String(lovelace) },
-      h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'signer', checked: i === state.signer, 'data-identity': id.label,
+      h('span', { class: `avatar ${id.cip30 ? 'wallet' : `c${i % 6}`}`, 'aria-hidden': 'true', text: id.label.trim().charAt(0).toUpperCase() || '?' }),
+      h('label', { class: 'who' }, h('input', { type: 'radio', name: 'signer', checked: i === state.signer, 'data-identity': id.label,
         onchange: () => { state.signer = i; drawIdentities(); drawOperations(); } }), ' ', h('strong', { text: id.label })),
-      id.testOnly ? h('span', { class: 'testonly', text: 'test-only' }) : null, id.cip30 ? h('span', { class: 'muted', text: ' CIP-30' }) : null,
-      ' ', h('code', { text: id.address.slice(0, 24) + '…' }), ' ', h('span', { text: ada(lovelace) }),
-      ' ', h('span', { class: 'muted', text: 'key hash ' + id.keyHash.slice(0, 10) + '…' })));
+      h('span', { class: 'balance', text: ada(lovelace) }),
+      h('span', { class: 'id-meta' }, id.testOnly ? h('span', { class: 'testonly', text: 'test-only' }) : null,
+        id.cip30 ? h('span', { class: 'tag', text: 'CIP-30' }) : null, ' ', copyable(id.address, { head: 14, tail: 6, label: 'Copy the address' }),
+        ' ', h('span', { title: id.keyHash, text: 'key ' + id.keyHash.slice(0, 8) + '…' })),
+      i === state.signer ? h('span', { class: 'signing-tag', text: 'SIGNS' }) : null));
   }
   const nextIndex = state.identities.filter((x) => !x.cip30).length;
-  box.replaceChildren(h('ul', {}, rows), h('button', { text: '+ identity', onclick: () => guard(async () => {
+  box.replaceChildren(h('ul', {}, rows), h('div', { class: 'panel-foot' }, h('p', { class: 'muted', text: devkit()
+    ? 'Test identities: DevKit\'s public test mnemonic, derived in this page; the server only tops their addresses up.'
+    : 'Simulation keys, in this page\'s memory only: never sent to the server, stored or exported.' }),
+  h('button', { text: '+ identity', onclick: () => guard(async () => {
     const id = newIdentity(nextIndex);
     state.identities.push(id);
     await fund(id);
     await drawIdentities();
-  }) }), h('p', { class: 'muted', text: devkit()
-    ? 'Test identities: DevKit\'s public test mnemonic, derived in this page; the server only tops their addresses up.'
-    : 'Simulation keys, in this page\'s memory only: never sent to the server, stored or exported.' }));
+  }) })));
   drawWallets();
 }
 
@@ -490,9 +530,15 @@ async function connectWallet(key) {
 // ---- contracts
 function drawContracts() {
   const list = $('contracts');
-  list.replaceChildren(...state.session.contracts.map((c) => h('button', { class: 'contract', 'data-contract': c.name,
-    text: c.name.split('.').at(-1) + (c.served ? '' : ` (unsupported: ${c.unsupported})`), title: c.name, disabled: !c.served,
-    onclick: () => guard(() => selectContract(c.name)) })));
+  list.replaceChildren(...state.session.contracts.map((c) => {
+    const simple = c.name.split('.').at(-1);
+    const pkg = c.name.split('.').slice(0, -1).join('.');
+    return h('button', { class: 'contract' + (state.contract?.name === c.name ? ' active' : ''), 'data-contract': c.name, title: c.name,
+      disabled: !c.served, onclick: () => guard(() => selectContract(c.name)) },
+      h('span', { class: 'glyph', 'aria-hidden': 'true', text: simple.charAt(0).toUpperCase() }),
+      h('span', { class: 'cname' }, h('span', { text: simple + (c.served ? '' : ` (unsupported: ${c.unsupported})`) }),
+        pkg ? h('span', { class: 'cpkg', text: pkg }) : null));
+  }));
 }
 
 async function selectContract(name) {
@@ -515,7 +561,11 @@ async function selectContract(name) {
     : maps && !anchors.mapVerifier ? 'unsupported: this build carries no map verifier for its MerkleMaps' : null;
   state.contract = { name, describe: r.describe, description: r.description, script: r.script, anchors, deployment, missing };
   state.instance = null;
-  $('contract-title').replaceChildren(h('span', { text: name }), ' ', h('code', { class: 'muted', title: 'the contract address (derived from the pinned build)', text: address }));
+  $('contract-title').replaceChildren(h('span', { text: name.split('.').at(-1) }), ' ',
+    name.includes('.') ? h('span', { class: 'pkg', text: name }) : null, ' ',
+    h('span', { class: 'chip', title: 'the contract address (derived from the pinned build)' }, h('b', { text: 'address' }),
+      copyable(address, { head: 16, tail: 8, label: 'Copy the contract address' })));
+  drawContracts();
   await drawInstances();
   drawOperations();
 }
@@ -537,12 +587,15 @@ async function drawInstances() {
   }
   const items = listing.items.filter((it) => it.instance);
   const rows = items.map((it) => h('li', { class: it.instance === state.instance ? 'selected' : '' },
-    h('button', { class: 'instance', 'data-instance': it.instance, text: it.instance.slice(0, 16) + '…',
-      onclick: () => guard(async () => { state.instance = it.instance; await drawInstances(); drawOperations(); }) }),
+    h('div', { class: 'inst-head' },
+      h('button', { class: 'instance', 'data-instance': it.instance, title: it.instance, text: it.instance.slice(0, 16) + '…',
+        onclick: () => guard(async () => { state.instance = it.instance; await drawInstances(); drawOperations(); }) }),
+      it.instance === state.instance ? h('span', { class: 'selected-tag', text: 'SELECTED' })
+        : h('span', { class: 'muted', text: 'select' })),
     h('pre', { class: 'state', text: show(it.value) })));
   const foreign = listing.items.length - items.length;
   fill(box, h('ul', {}, rows), foreign ? h('p', { class: 'muted', text: `${foreign} other output(s) at the contract address (reference scripts, foreign or old outputs)` }) : null,
-    items.length ? null : h('p', { class: 'muted', text: 'No instance yet: create one below.' }));
+    items.length ? null : h('p', { class: 'empty', text: 'No instance yet: create one with an operation below.' }));
   if (state.instance && !items.some((it) => it.instance === state.instance)) state.instance = null;
   await drawObjects();
 }
@@ -579,7 +632,7 @@ function drawOperations() {
   const c = state.contract;
   if (!c) return;
   const signer = state.identities[state.signer];
-  box.replaceChildren(h('p', { class: 'muted' }, 'Signing as ', h('strong', { text: signer.label }), state.instance ? ' on instance ' : '',
+  box.replaceChildren(h('p', { class: 'signing-as' }, 'Signing as ', h('strong', { text: signer.label }), state.instance ? ' on instance ' : '',
     state.instance ? h('code', { text: state.instance.slice(0, 16) + '…' }) : ''));
   for (const call of c.describe.calls) {
     const meta = metaOf(c.description, call);
@@ -591,7 +644,7 @@ function drawOperations() {
     if (!reason && meta.policies?.quorum && signer.cip30) reason = 'unsupported: a @Quorum call is co-signed by this page\'s identities; sign it as one of them';
     if (!reason) reason = keyedRefusal(signer, isKeyedRequest(c.description, call));
     const card = h('div', { class: 'operation' + (reason ? ' disabled' : ''), 'data-call': `${call.kind}:${call.method}` },
-      h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: call.kind })));
+      h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: `kind k-${call.kind}`, text: call.kind })));
     box.append(card);
     if (reason) {
       card.append(h('span', { class: 'badge', text: reason.toUpperCase().startsWith('UNSUPPORTED') ? reason : reason }));
@@ -633,6 +686,7 @@ function drawOperations() {
     if (bad.length) card.append(h('span', { class: 'badge', text: 'UNSUPPORTED argument types: ' + bad.map((u) => u.path).join(', ') }));
     if (NEEDS_INSTANCE.has(call.kind) && !state.instance) card.append(h('span', { class: 'muted', text: ' choose an instance first' }));
   }
+  if (!c.describe.calls.some((call) => call.kind !== 'view')) box.append(h('p', { class: 'empty', text: 'This contract has no calls to make.' }));
   drawViews();
 }
 
@@ -650,7 +704,7 @@ function drawViews() {
   const cards = views.map((call) => {
     const meta = (c.description['x-joust']?.views ?? []).find((v) => v.name === call.method) ?? null;
     const card = h('div', { class: 'operation view' + (call.served && meta ? '' : ' disabled'), 'data-view': call.method },
-      h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind', text: 'view' })));
+      h('h4', {}, h('span', { text: call.method }), ' ', h('span', { class: 'kind k-view', text: 'view' })));
     if (!call.served || !meta) {
       card.append(h('span', { class: 'badge', text: `unsupported: ${call.unsupported ?? 'not in the description'}` }));
       return card;
@@ -924,18 +978,19 @@ function approval({ title, lines, states, predicted, who }) {
     const panel = $('review');
     const done = (ok) => () => { panel.hidden = true; panel.replaceChildren(); resolve(ok); };
     fill(panel,
-      h('h3', { text: title }),
-      h('p', { class: 'muted', text: 'The page checked this body itself: everything above the line is read from the body and the chain.' }),
-      h('table', {}, lines.map(([k, v]) => h('tr', {}, h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
+      h('h3', { id: 'review-title', text: title }),
+      h('p', { class: 'lead', text: 'The page checked this body itself: everything in the table is read from the body and the chain.' }),
+      h('table', {}, lines.map(([k, v]) => h('tr', { class: / in all$/.test(k) || k === 'fee' ? 'highlight' : null },
+        h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
       states,
       // The host's own projection: not checked and not part of the decision, kept apart and folded.
       predicted ? h('details', { class: 'predicted' }, h('summary', { text: 'The dev host\'s prediction (unchecked, not used to decide)' }),
         h('pre', { id: 'review-predicted', text: show(predicted) })) : null,
       h('div', { class: 'actions' },
-        h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${who}`, onclick: done(true) }),
-        h('button', { id: 'decline', text: 'Decline', onclick: done(false) })));
+        h('button', { id: 'decline', class: 'ghost', text: 'Decline', onclick: done(false) }),
+        h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${who}`, onclick: done(true) })));
     panel.hidden = false;
-    panel.scrollIntoView({ block: 'nearest' });
+    $('approve').focus();
   });
 }
 
@@ -993,8 +1048,10 @@ async function reviewSignSubmit(r, label, signer, { predicted, request, publicat
   // The state change, as the checks read it: before from the chain's target output, after from the body's checked
   // continuation (a destroy removes the state; a creation has none before). Built per panel (a node lives in one).
   const states = () => (publication ? null : h('div', { class: 'states' },
-    h('h4', { text: 'Before (on the chain)' }), h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) }),
-    h('h4', { text: 'After (in this transaction)' }), h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) })));
+    h('div', { class: 'before' }, h('h4', { text: 'Before (on the chain)' }),
+      h('pre', { id: 'review-before', text: report.before === null ? '(none: a creation)' : show(report.before) })),
+    h('div', { class: 'after' }, h('h4', { text: 'After (in this transaction)' }),
+      h('pre', { id: 'review-after', text: report.removed ? '(removed: a destroy)' : show(report.after) }))));
   const title = publication ? `Review publication: ${publication.kind}` : `Review: ${request.method}`;
   // 5. sign (stage wallet): the caller, then each co-signer, each after its own approval of the same checked body.
   let cbor = r.prepared.cbor;
@@ -1243,9 +1300,10 @@ async function replay(text) {
   // The replayed session's own record: its steps, as this session made them.
   state.scenario = { steps: scenario.steps, created };
   const same = results.filter(Boolean).length;
-  document.body.dataset.replay = `${same}/${results.length}`;
   note(`scenario replayed: ${same} of ${results.length} call(s) with the same outcome`, same === results.length ? 'ok' : 'error');
   await refresh();
+  // Marked once the page is drawn again: an import right after the mark is not dropped as a second action.
+  document.body.dataset.replay = `${same}/${results.length}`;
 }
 
 function currentState() {
@@ -1291,13 +1349,13 @@ function drawHistory() {
   const pending = (o) => o === 'submitted' || o === 'declined' || /^rolled back/.test(o ?? '');
   $('history').replaceChildren(h('ul', {}, state.history.map((e) => h('li', { class: good(e.outcome) ? 'ok' : pending(e.outcome) ? ''
     : e.outcome === 'outcome unknown' ? 'warn' : 'error', 'data-tx': e.txHash ?? null, 'data-outcome': e.outcome },
-    h('strong', { text: e.label }), ' ', h('span', { text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
+    h('strong', { text: e.label }), ' ', h('span', { class: 'outcome', text: e.outcome }), e.stage ? h('span', { class: 'stage', text: ` at stage ${e.stage}` }) : null,
     e.kind ? h('code', { text: ` ${e.kind}` }) : null, e.code ? h('code', { text: ` ${e.code}` }) : null,
     e.retryAtSlot !== undefined && e.retryAtSlot !== null ? h('span', { class: 'muted', text: ` (prepare again at slot ${e.retryAtSlot})` }) : null, e.message ? h('div', { class: 'msg', text: e.message }) : null,
     Array.isArray(e.sites) && e.sites.length ? h('div', { class: 'msg', text: e.sites.map((s) => `${s.file}:${s.line}:${s.col} ${s.what ?? ''}`).join('; ') }) : null,
-    e.txHash ? h('div', {}, h('code', { text: e.txHash })) : null,
+    e.txHash ? h('div', {}, copyable(e.txHash, { head: 12, tail: 10, label: 'Copy the transaction hash' })) : null,
     e.outcome === 'outcome unknown' ? h('button', { class: 'recheck', text: 'recheck', onclick: () => guard(() => recheck(e)) }) : null,
-    e.attacks !== undefined ? h('div', { class: e.accepted?.length ? 'warn' : 'muted',
+    e.attacks !== undefined ? h('div', { class: 'attacks ' + (e.accepted?.length ? 'warn' : 'muted'),
       text: `attacks run: ${e.attacks}; accepted by the scripts: ${e.accepted?.length ?? 0}` }) : null))));
 }
 
