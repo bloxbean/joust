@@ -4,7 +4,7 @@ JOUST's contract language, `.jsc`, in VS Code (ADR-0021, milestones M5a–M5e). 
 
 ## Install
 
-**Versions.** The extension has its own version. **0.1.0 bundles the compiler of JOUST 0.1.0-pre2**; each later JOUST
+**Versions.** The extension has its own version. **0.1.1 bundles the compiler of JOUST 0.1.0-pre3**; each later JOUST
 release that publishes the extension bumps its patch. The
 [changelog](https://github.com/bloxbean/joust/blob/main/js/vscode-joust/CHANGELOG.md) lists which JOUST release each
 version bundles.

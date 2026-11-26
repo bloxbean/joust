@@ -2,7 +2,7 @@
   "name": "vscode-joust",
   "displayName": "JOUST .jsc",
   "description": "JOUST's contract language, .jsc, in VS Code: diagnostics as you type from the build's own front end (with recovery), hover, go to definition, references, completion, rename, semantic highlighting, the outline, folding, quick fixes, the generated Java, build diagnostics on save, Accept ABI…, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "preview": true,
   "license": "MIT",
