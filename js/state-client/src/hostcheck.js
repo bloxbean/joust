@@ -16,14 +16,16 @@
 // before / after (the state, or an owned call's object value: the target output's datum and the body's continuation,
 // decoded with the description), removed (a destroy) }.
 //
-// One deliberate difference: map claims (ADR-0014) are not checked here (the reference verifies their MPF proofs), so a
-// call on a contract state or owned value with a MerkleMap field is refused as notVerifiable (fail closed).
+// Map claims (ADR-0014) are checked as the reference checks them: the map verifier's MapClaims redeemer, each claim's
+// owner, field and MPF proofs (mpf.js, a port of julc-state-api's Mpf and MapWitnesses.verify), and both roots
+// against the target and continuation datums.
 
 import { blake2b } from '@noble/hashes/blake2.js';
 import { hexToBytes, bytesToHex, compareBytes } from './hex.js';
 import { addressHex, bech32Of } from './ledger.js';
 import { codec as makeCodec } from './data.js';
 import { decodeData, dataEqual, canonicalHex } from './pdata.js';
+import { mapClaimsOf, verifyClaim, EMPTY_ROOT } from './mpf.js';
 
 class Malformed extends Error {}
 const req = (ok) => { if (!ok) throw new Malformed('malformed CBOR or ledger field'); };
@@ -542,8 +544,6 @@ class Checker {
         if (asText(path(field, '$ref')) === '#/definitions/' + MAP_TYPE) names.push(asText(rq(field, 'title')));
       }
       this.mapFields = names;
-      // Not checked here (the reference verifies the map claims' proofs): fail closed.
-      if (names.length) return false;
     }
     const p = path(meta, 'policies');
     const recipe = path(meta, 'recipe');
@@ -909,6 +909,7 @@ class CallRules {
     this.after = null;
     this.paymentBound = false;
     this.assetsBound = false;
+    this.mapRedeemer = null;
   }
 
   decodeDatum(hex) { return this.codec.decode(this.datumSchema, data(hex)); }
@@ -946,9 +947,13 @@ class CallRules {
           c.test('redeemer/mintRedeemer', false);
         }
       } else if (tag === 'reward' && c.ledger.b.has(5) && (asBool(atp(meta, '/returns/sends')) || c.mapFields.length > 0)) {
+        // A map call's map-verifier redeemer sits at that account's Reward pointer; the output verifier's at its own.
         const outputs = c.reward('outputVerifier');
-        c.test('pointer/reward', asBool(atp(meta, '/returns/sends')) && index === (c.mapFields.length === 0 ? 0 : c.rewards.indexOf(outputs)));
-        this.outputClaims(r.data);
+        if (c.mapFields.length && index >= 0 && index < c.rewards.length && c.rewards[index] !== outputs) this.mapRedeemer = r;
+        else {
+          c.test('pointer/reward', asBool(atp(meta, '/returns/sends')) && index === (c.mapFields.length === 0 ? 0 : c.rewards.indexOf(outputs)));
+          this.outputClaims(r.data);
+        }
       } else c.test('redeemer/purpose', false);
     }
     const count = (t) => counts.get(t) ?? 0;
@@ -960,6 +965,42 @@ class CallRules {
       c.test('mint/action', c.minted.size === 0 || (byAction && [...c.minted.keys()].every((u) => u.startsWith(c.policy) && u !== c.token)));
     }
     this.outputs();
+    if (c.mapFields.length) this.checkMaps();
+  }
+
+  /** ADR-0014 map claims (CallRules.checkMaps): the map verifier's MapClaims redeemer names, per map field, the owner
+   * and both roots; each claim's proofs verify (MapWitnesses.verify). */
+  checkMaps() {
+    const c = this.c;
+    try {
+      const claims = mapClaimsOf(data(rq(this.mapRedeemer ?? {}, 'data')));
+      c.test('mapClaims/count', claims.length === c.mapFields.length);
+      const seen = new Set();
+      for (const claim of claims) {
+        const field = claim.field;
+        req(field >= -(2n ** 31n) && field < 2n ** 31n);
+        const index = Number(c.creation ? -1n - field : field);
+        const owner = `${bytesToHex(claim.owner.txId)}#${claim.owner.index}`;
+        // In the reference's order, short-circuiting alike: the field is marked seen only once policy and owner hold.
+        const fresh = () => { const f = !seen.has(index); seen.add(index); return f; };
+        c.test('mapClaims/claim', bytesToHex(claim.policy) === c.policy && owner === (c.creation ? this.seed : c.spent)
+          && fresh() && index >= 0 && index < c.mapFields.length && verifyClaim(claim));
+        if (index < 0 || index >= c.mapFields.length) continue;
+        const name = c.mapFields[index];
+        if (c.creation) c.test('mapClaims/creationRoot', compareBytes(claim.oldRoot, EMPTY_ROOT) === 0);
+        else this.mapDatum(this.before, name, claim.oldRoot);
+        if (!c.destroy) this.mapDatum(this.after, name, claim.newRoot);
+        else c.test('mapClaims/destroyWrites', claim.writes.length === 0);
+      }
+    } catch {
+      c.test('mapClaims/decode', false);
+    }
+  }
+
+  mapDatum(state, field, root) {
+    const map = isObj(state) ? state[field] : undefined;
+    this.c.test('mapDatum/root', root.length === 32 && isObj(map) && bytesToHex(root) === map.root
+      && Array.isArray(map.reads) && map.reads.length === 0 && Array.isArray(map.writes) && map.writes.length === 0);
   }
 
   schema(purpose) {

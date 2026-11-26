@@ -916,9 +916,10 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       const w = await wallet();
       const [x, y] = await Promise.all([s.fund(w.address, String(1000n * ADA)), s.fund(w.address, String(1000n * ADA))]);
       assert.deepEqual([x, y], [{ toppedUp: true }, { toppedUp: true }]);
-      assert.equal(calls, 1, 'coalesced');
+      assert.equal(calls, 2, 'coalesced: one top-up, paid as two outputs');
+      assert.equal((await L.utxos(w.address)).length, 2, 'two outputs: one reserved body does not lock the identity out (Fable FM1)');
       assert.deepEqual(await s.fund(w.address, String(1000n * ADA)), { toppedUp: false }, 'already holds 100 ADA or more');
-      assert.equal(calls, 1);
+      assert.equal(calls, 2);
       dry = true;
       const v = await wallet();
       await assert.rejects(s.fund(v.address, String(1000n * ADA)), (e) => e.code === 'faucet' && /dry/.test(e.message));
@@ -1011,6 +1012,29 @@ describe('ADR-0024 M3: DevKit sessions over a chain the test controls', { skip }
       } finally {
         await s.close();
       }
+    }
+  });
+
+  test('#180 M4: landed() reads one stable chain point; final only strictly past the margin; a moving chain point is no observation', async () => {
+    const { s, w, chain } = await ready({ startTime: 177 });
+    try {
+      const instance = await create(s, w);
+      const r = await increment(s, w, instance);
+      await s.submit(r.prepared.reservation, await signed(w, r.prepared));
+      const h = r.prepared.txHash;
+      const margin = s.status().settlementSlots;
+      const slot = (await chain.txSlot(h));
+      assert.ok(Number.isSafeInteger(slot));
+      chain.tipOverride = () => ({ slot: slot + margin, hash: sha('at the margin'), height: 1 });
+      assert.deepEqual(await s.landed(h), { landed: true, final: false, slot, tip: slot + margin }, 'equality at the margin: shallow');
+      chain.tipOverride = () => ({ slot: slot + margin + 1, hash: sha('past'), height: 1 });
+      assert.equal((await s.landed(h)).final, true, 'strictly past it: final');
+      let n = 0;
+      chain.tipOverride = () => ({ slot: slot + margin + 5, hash: sha('fork' + n++), height: 1 });
+      assert.deepEqual(await s.landed(h), { landed: false, final: false, slot: null, tip: null }, 'the chain point moved: no observation (pending)');
+    } finally {
+      chain.tipOverride = null;
+      await s.close();
     }
   });
 

@@ -566,6 +566,28 @@ export function snapshotContracts(entries) {
   return out;
 }
 
+/**
+ * The shared verifiers' scripts in a verified snapshot (ADR-0024 M4): JOUST's OutputVerifier and MapVerifier, read as
+ * the JVM host anchors them, from the julc-state-verifier entry that holds their classes (the script beside the class).
+ * A verifier the snapshot lacks is absent: calls that need it are then refused by the page's checks.
+ */
+export function snapshotVerifiers(entries) {
+  const out = {};
+  for (const [key, name] of [['outputVerifier', 'OutputVerifier'], ['mapVerifier', 'MapVerifier']]) {
+    const owner = entries.find((e) => e.names.has(`org/julclang/state/verifier/${name}.class`));
+    const plutus = owner?.resources.get(`META-INF/plutus/${name}.plutus.json`);
+    if (!plutus) continue;
+    let script;
+    try {
+      script = JSON.parse(plutus.toString('utf8')).cborHex;
+    } catch {
+      continue;
+    }
+    if (typeof script === 'string' && /^(?:[0-9a-f]{2})+$/.test(script)) out[key] = script;
+  }
+  return out;
+}
+
 // ---- freshness (I6)
 
 /** Every non-directory name under {@code dir}, relative, sorted as the spec sorts them (links and FIFOs included). */
@@ -751,7 +773,7 @@ export function gradleSource(root, { built = true, gatedSpec, gradle, log = cons
       previous = current;
       let disposed = false;
       return {
-        kind: 'gradle', root: build.project, digest: snap.digest, snapshot: snap.dir, entries,
+        kind: 'gradle', root: build.project, digest: snap.digest, snapshot: snap.dir, entries, verifiers: snapshotVerifiers(snap.entries),
         stale: () => !current(),
         launch: (o) => launch({ java, classPath: snap.classPath, project: build.project, ...o }),
         dispose() {
