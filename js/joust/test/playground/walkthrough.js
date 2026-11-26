@@ -26,7 +26,8 @@ export async function walkthrough(page, { views = false } = {}) {
         // Label, outcome, stage and code of each entry: messages and hashes differ by run.
         history: [...document.querySelectorAll('#history li')].map((li) =>
           [text(li.querySelector('strong')), text(li.querySelector('span')), text(li.querySelector('.stage')),
-            text(li.querySelector('code'))].filter((s) => s && !/^[0-9a-f]{64}$/.test(s)).join(' ')),
+            // The entry's own kind or code (a direct child), never the transaction hash beside it (shown short, copyable).
+            text(li.querySelector(':scope > code'))].filter((s) => s && !/^[0-9a-f]{64}$/.test(s)).join(' ')),
       };
     })) });
   };

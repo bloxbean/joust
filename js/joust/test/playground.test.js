@@ -629,7 +629,8 @@ for (const kind of ['java', 'jsc']) {
       await page.waitForSelector('#approve');
       assert.match(await page.locator('#review-before').innerText(), /"count": "7"/);
       assert.match(await page.locator('#review-after').innerText(), /"count": "8"/);
-      assert.doesNotMatch(await page.locator('#review table').innerText(), /999/);
+      // The prediction's 999 as a number of its own, never inside a hex value (a hash may hold "999").
+      assert.doesNotMatch(await page.locator('#review table').innerText(), /(?<![0-9a-f])999(?![0-9a-f])/);
       assert.equal(await page.locator('#review details.predicted').getAttribute('open'), null, 'the prediction is folded');
       await page.click('#approve');
       await page.waitForFunction((k) => document.querySelectorAll('#history li.ok').length > k, p);
@@ -858,8 +859,9 @@ describe('ADR-0024 M1: a payout to Bob\'s key hash is Bob\'s to spend (Chromium,
     for (const who of ['Alice', 'Bob']) {
       const keyHash = await page.locator(`#identities li[data-identity=${who}]`).getAttribute('data-key-hash');
       const { enterpriseAddress } = await import('@julclang/state-client');
-      const shown = await page.locator(`#identities li[data-identity=${who}] code`).innerText();
-      assert.ok(enterpriseAddress({ type: 'key', hash: keyHash }, 0).startsWith(shown.replace('…', '')), who);
+      // The address is shown short (head…tail); its title and copy button carry the whole of it.
+      const shown = await page.locator(`#identities li[data-identity=${who}] code`).getAttribute('title');
+      assert.equal(shown, enterpriseAddress({ type: 'key', hash: keyHash }, 0), who);
     }
     await page.click(`[data-contract="${ESCROW}"]`);
     await page.waitForSelector('[data-call="init:open"] button.run');

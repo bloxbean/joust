@@ -3,39 +3,75 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
   <title>JOUST playground</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <header>
-    <h1>JOUST playground</h1>
-    <div id="banner" class="banner" aria-live="polite">Starting…</div>
+  <header class="topbar">
+    <div class="brand">
+      <!-- The JOUST Knight emblem (docs/assets/logo/joust-knight-emblem.svg): shapes unchanged, colours from the theme. -->
+      <svg class="logo" viewBox="378 47 570 836" aria-hidden="true">
+        <path class="ink" d="M688 400 H873 V649 C873 788 765 873 646 873 H610 C462 873 388 801 388 654 H548 V672 C548 714 574 740 613 740 C657 740 688 708 688 655 Z"/>
+        <path class="ink" fill-rule="evenodd" d="M583 57 L728 127 C834 179 898 276 938 406 L488 575 C554 495 616 423 657 353 L526 381 L463 447 L389 417 V360 L495 235 L506 200 L595 140 Z M610 212 L530 245 L510 277 L581 257 Z"/>
+        <path class="spark" d="M691 234 L938 406 C812 475 640 515 488 575 C582 507 715 450 823 396 Z"/>
+      </svg>
+      <span class="wordmark">JOUST</span>
+      <span class="product">Playground</span>
+    </div>
+    <span class="grow"></span>
+    <a class="toplink" href="https://github.com/bloxbean/joust" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <button id="theme" class="icon-btn" type="button" aria-label="Switch between light and dark" title="Switch between light and dark">
+      <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z"/></svg>
+    </button>
   </header>
-  <main>
-    <section class="side">
-      <h2>Identities</h2>
-      <div id="identities"></div>
-      <div id="wallets"></div>
-      <div id="pending-ops"></div>
-      <h2>Contracts</h2>
-      <div id="contracts"></div>
-    </section>
-    <section class="center">
-      <h2 id="contract-title">Choose a contract</h2>
-      <h3>Instances</h3>
-      <div id="instances"></div>
-      <div id="objects"></div>
+
+  <div id="banner" class="banner" aria-live="polite"><div class="starting"><span class="spinner"></span> Starting the session…</div></div>
+
+  <main class="layout">
+    <aside class="column">
+      <section class="panel">
+        <div class="panel-head"><h2>Identities</h2><span class="panel-hint">who signs</span></div>
+        <div id="identities"></div>
+        <div id="wallets"></div>
+        <div id="pending-ops"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Contracts</h2><span class="panel-hint">this project's build</span></div>
+        <div id="contracts" class="nav"></div>
+      </section>
+    </aside>
+
+    <section class="column center">
+      <div class="panel contract-head">
+        <h2 id="contract-title">Choose a contract</h2>
+      </div>
+      <section class="panel">
+        <div class="panel-head"><h3>Instances</h3><span class="panel-hint">on the ledger</span></div>
+        <div id="instances"><p class="empty">Pick a contract on the left: its instances and their state show here.</p></div>
+        <div id="objects"></div>
+      </section>
       <div id="views"></div>
-      <h3>Operations</h3>
-      <div id="operations"></div>
-      <div id="review" class="review" hidden></div>
+      <section class="panel">
+        <div class="panel-head"><h3>Operations</h3><span class="panel-hint">every call is checked and reviewed before it is signed</span></div>
+        <div id="operations" class="operations"></div>
+      </section>
+      <!-- A modal dialog (showModal): the rest of the page is inert while a body is under review. -->
+      <dialog id="review" class="review" aria-labelledby="review-title"></dialog>
     </section>
-    <section class="side">
-      <h2>History</h2>
-      <div id="history"></div>
-      <h2>Log</h2>
-      <div id="log" class="log"></div>
-    </section>
+
+    <aside class="column">
+      <section class="panel">
+        <div class="panel-head"><h2>History</h2><span class="panel-hint">newest first</span></div>
+        <div id="history"><p class="empty">No calls yet.</p></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Log</h2></div>
+        <div id="log" class="log"></div>
+      </section>
+    </aside>
   </main>
   <script type="module" src="./main.js"></script>
 </body>
