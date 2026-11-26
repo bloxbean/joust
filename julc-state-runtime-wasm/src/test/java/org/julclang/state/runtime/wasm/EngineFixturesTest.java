@@ -30,9 +30,8 @@ class EngineFixturesTest {
         return m == null || m.isNull() ? null : m.isTextual() ? m.asText() : m.toString();
     }
 
-    @Test
-    void engineFixturesReplayOnTheJvm() throws Exception {
-        assumeTrue(Files.isDirectory(FIXTURES), "no fixtures/m3 (record with JOUST_RECORD)");
+    /** The recorded contracts (fixtures/m3/contracts), by content hash. */
+    static Map<String, Prepare.Contract> contracts() throws Exception {
         var contracts = new LinkedHashMap<String, Prepare.Contract>();
         try (Stream<Path> s = Files.list(FIXTURES.resolve("contracts"))) {
             for (Path p : s.toList()) {
@@ -43,6 +42,46 @@ class EngineFixturesTest {
                         new Prepare.Contract(c.get("description").asText(), c.get("script").asText(), transitions, manifest(c)));
             }
         }
+        return contracts;
+    }
+
+    /** A recorded request, prepared again from {@code snapshot}. */
+    static Prepare.Result prepare(JsonNode x, JsonNode snapshot, Map<String, Prepare.Contract> contracts) {
+        var cs = new ArrayList<Prepare.Contract>();
+        for (JsonNode sha : x.get("contracts")) cs.add(contracts.get(sha.asText()));
+        JsonNode clock = x.get("clock");
+        return Prepare.prepare(new Prepare.Request(x.get("call").toString(), snapshot.toString(), cs,
+                clock.get("zeroSlot").asLong(), clock.get("zeroTimeMs").asLong(), clock.get("slotLengthMs").asLong(),
+                x.get("ttlMs").asLong(), x.get("networkId").asInt(), Map.of(), Map.of()));
+    }
+
+    /**
+     * #165 reviewer3 R3-4: a governor's registration is checked per unit like every prepared body. The snapshot answers
+     * each output alike to QuickTx and to the check, so the recorded registration is accepted and the same body with its
+     * fee raised by 1 ADA (the outputs unchanged) is refused.
+     */
+    @Test
+    void anUnbalancedRegistrationIsRefused() throws Exception {
+        Path f = FIXTURES.resolve("treasury-governor/001-register.json");
+        assumeTrue(Files.isRegularFile(f), "no fixtures/m3 (record with JOUST_RECORD)");
+        JsonNode x = JSON.readTree(f.toFile());
+        var honest = prepare(x, x.get("snapshot"), contracts());
+        assertTrue(honest.ok(), honest::error);
+        assertEquals(x.get("cbor").asText(), honest.cbor());
+        var backend = new org.julclang.state.runtime.snapshot.SnapshotBackend(
+                org.julclang.state.runtime.snapshot.Snapshot.fromJson(x.get("snapshot").toString()));
+        var tx = com.bloxbean.cardano.client.transaction.spec.Transaction.deserialize(
+                com.bloxbean.cardano.client.util.HexUtil.decodeHexString(honest.cbor()));
+        Prepare.checkRegistration(tx, backend);
+        tx.getBody().setFee(tx.getBody().getFee().add(java.math.BigInteger.valueOf(1_000_000)));
+        var e = assertThrows(org.julclang.state.runtime.BodyBalance.UnbalancedException.class, () -> Prepare.checkRegistration(tx, backend));
+        assertTrue(e.getMessage().contains("register the stake credential"), e::getMessage);
+    }
+
+    @Test
+    void engineFixturesReplayOnTheJvm() throws Exception {
+        assumeTrue(Files.isDirectory(FIXTURES), "no fixtures/m3 (record with JOUST_RECORD)");
+        var contracts = contracts();
         List<String> diffs = new ArrayList<>();
         var groups = new LinkedHashMap<String, Integer>();
         try (Stream<Path> s = Files.walk(FIXTURES)) {

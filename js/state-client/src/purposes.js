@@ -3,11 +3,12 @@
 // rewards go. Each prepared transaction is verified before the wallet signs: nothing beyond the operation, the
 // wallet's funds bounded (it pays the fee only), the redeemers the page's own.
 
-import { DEFAULT_LIMITS, add, isWalletEnterprise } from './verify.js';
+import { DEFAULT_LIMITS, add, isWalletEnterprise, integrityChecks, scriptBearingChecks } from './verify.js';
 import { codec as makeCodec } from './data.js';
 import { Data, dataEqual } from './pdata.js';
 import { rewardAddressOf } from './governors.js';
 import { parseTx } from './ledger.js';
+import { outputRegistry, claimedSends, rewardRefOf } from './claims.js';
 
 /** The contract's purpose handler of {@code purpose} (withdraw, certify, vote, propose), or null. */
 export const purposeOf = (description, purpose) => (description['x-joust'].purposes ?? []).find((p) => p.purpose === purpose) ?? null;
@@ -44,6 +45,7 @@ export async function verifyPurpose(o) {
   } catch (e) {
     return { problems: ['not a transaction'], report: {} };
   }
+  scriptBearingChecks(tx, wallet, problems);
   const report = { fee: tx.fee };
   const policy = deployment.policy;
   const own = rewardAddressOf(policy, deployment.networkId);
@@ -57,6 +59,8 @@ export async function verifyPurpose(o) {
   if (tx.mint.size) problems.push('a mint');
   if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
+  // The body commits to the redeemers verified below (the handler's, the output verifier's claims).
+  integrityChecks(tx, chain.params, problems);
 
   // Certificates: a delegation's one, of the script's own credential to the page's pool; none for a collection.
   const certs = tx.certificates;
@@ -117,7 +121,12 @@ export async function verifyPurpose(o) {
   const pinned = new Set([...(deployment.referenceScripts ?? []), ...(deployment.outputVerifier?.referenceScripts ?? [])]);
   for (const r of tx.referenceInputs) if (!pinned.has(r)) problems.push(`a reference input the page does not know: ${r}`);
 
-  // Outputs: the wallet's (no datum or script); others only from the rewards withdrawn.
+  // Outputs: the wallet's (no datum or script); others only from the rewards withdrawn beyond the handler's claimed sends
+  // to the wallet (claimed for RewardRef(policy), I37: the script's release to the wallet, never its change).
+  // No deposits: a collection has no receiver.
+  const registry = op === 'collect' ? outputRegistry(tx, deployment.outputVerifier, problems) : null;
+  if (registry?.deposits.length) problems.push('a deposit claim in a reward collection');
+  const claimed = claimedSends(tx, [{ registry, owners: [rewardRefOf(policy)] }], isWallet, problems);
   const produced = new Map();
   const back = new Map();
   let others = 0n;
@@ -133,7 +142,12 @@ export async function verifyPurpose(o) {
       others += value.get('lovelace') ?? 0n;
     }
   }
-  if (others > withdrawn) problems.push(`others receive ${others} lovelace, more than the ${withdrawn} of rewards withdrawn`);
+  const free = withdrawn - (claimed.value.get('lovelace') ?? 0n);
+  if (others > (free > 0n ? free : 0n)) {
+    problems.push(claimed.indexes.size
+      ? `others receive ${others} lovelace, more than the ${free > 0n ? free : 0n} of rewards withdrawn beyond the claimed sends to the wallet`
+      : `others receive ${others} lovelace, more than the ${withdrawn} of rewards withdrawn`);
+  }
   const fee = report.fee;
   add(produced, new Map([['lovelace', fee]]));
   const supplied = new Map(consumed);

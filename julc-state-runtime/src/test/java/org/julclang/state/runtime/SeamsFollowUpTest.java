@@ -143,8 +143,11 @@ class SeamsFollowUpTest {
             }
         });
         assertInstanceOf(ReadFailed.class, thrown.get(), "a failed page is a failed read, not the end of the answer");
-        // Unscoped: a failed page ends the listing, as before.
-        assertNull(pick.invoke(runner, payer.baseAddress(), Set.of()));
+        // Unscoped: a failed later page is an error too, never the end of the listing (#165 Codex round 7).
+        var unscoped = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> pick.invoke(runner, payer.baseAddress(), Set.of()));
+        assertInstanceOf(JoustException.class, unscoped.getCause());
+        assertTrue(unscoped.getCause().getMessage().contains("cannot read page 2"), unscoped.getCause().getMessage());
     }
 
     @Test
@@ -324,9 +327,9 @@ class SeamsFollowUpTest {
         var session = StateRuntime.builder(utxosOnly(same)).chainTime(new Chain().time()).network(Networks.testnet())
                 .claimStore(store).build();
         var contract = new StateContractHandle<>(session, ContractSpec.described("test", "4100", 0, 0, 0, false));
-        var seedOf = StateContractHandle.class.getDeclaredMethod("seedOf", Account.class);
-        seedOf.setAccessible(true);
-        var seed = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> seedOf.invoke(contract, payer));
+        var seedFrom = StateContractHandle.class.getDeclaredMethod("seedFrom", Account.class);
+        seedFrom.setAccessible(true);
+        var seed = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> seedFrom.invoke(contract, payer));
         assertInstanceOf(JoustException.class, seed.getCause());
         assertTrue(reads.get() <= 3, "reads: " + reads.get());
     }

@@ -26,7 +26,8 @@ final class Publication {
             // so a read failure or a control event below it still decides the host's answer.
             throw new SubmitException("publish prerequisite: could not build the transaction: " + e.getMessage(), e);
         }
-        var built = TxRunner.exportPrepared(runtime, "publish prerequisite", claimed, validTo);
+        // The payer's listing is the call's evidence for its inputs (no further read in a hosted call; the host checks it).
+        var built = TxRunner.exportPrepared(runtime, "publish prerequisite", claimed, validTo, List.of(address));
         return new PreparedTx(runtime, built, List.of(wallet.paymentKeyHash()), null, "publish prerequisite");
     }
 }

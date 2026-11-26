@@ -360,14 +360,15 @@ class DevHostSeamsTest {
 
     @Test
     void assetCollectionUsesTheFirstEligibleTokenInput() {
-        checkAssetCollection(new Account(Networks.testnet()), new HostStore(), true);
+        checkAssetCollection(new Account(Networks.testnet()), new HostStore());
     }
 
     @Test
-    void walletWithASessionStoreCollectsTheTokenBehindAdaAndReservedInputs() {
+    void aWalletCollectsTheTokenBehindAdaAndReservedInputsInEveryStore() {
+        // #165 fixed #152 for every store: the default JVM store no longer keeps the wallet shortcut.
         var wallet = WalletAccount.of(new Account(Networks.testnet()).baseAddress(), Networks.testnet());
-        checkAssetCollection(wallet, new HostStore(), true);
-        checkAssetCollection(wallet, JvmClaimStore.INSTANCE, false);
+        checkAssetCollection(wallet, new HostStore());
+        checkAssetCollection(wallet, JvmClaimStore.INSTANCE);
     }
 
     @Test
@@ -415,7 +416,10 @@ class DevHostSeamsTest {
         assertTrue(cap.inputs.contains(Designation.ref(tokens)), "the largest UTxO, picked for its token, is spent");
     }
 
-    /** #151 Codex re-review: asset selection skips a published reference script and an input the composition spends. */
+    /**
+     * #151 Codex re-review: asset selection skips a published reference script and never collects an input the
+     * composition spends again; that input counts for the payment (#165 reviewer3 R3-2), so a second token is collected.
+     */
     @Test
     void assetSelectionSkipsReferenceScriptsAndSpentInputs() {
         var chain = new Chain();
@@ -432,15 +436,16 @@ class DevHostSeamsTest {
         cap.inputs.add(Designation.ref(spent));
         TxRunner.CAPTURE.set(cap);
         try {
-            AssetTx.collectAssets(cap.tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
+            AssetTx.collectAssets(cap.tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.TWO), "test", null);
         } finally {
             TxRunner.CAPTURE.remove();
         }
         assertTrue(cap.inputs.contains(Designation.ref(free)), "the ordinary, unspent token input");
         assertFalse(cap.inputs.contains(Designation.ref(script)), "never the reference script");
+        assertFalse(cap.assetInputs.contains(Designation.ref(spent)), "the spent input counts, it is not collected again");
     }
 
-    private void checkAssetCollection(Account payer, ClaimStore store, boolean collects) {
+    private void checkAssetCollection(Account payer, ClaimStore store) {
         var chain = new Chain();
         var rt = runtime(chain, b -> b.claimStore(store));
         var contract = new StateContractHandle<>(rt, ContractSpec.described("test", "4100", 0, 0, 0, false));
@@ -458,7 +463,8 @@ class DevHostSeamsTest {
             }
         };
         AssetTx.collectAssets(tx, contract, payer, Assets.of(new byte[28], new byte[]{1}, BigInteger.ONE), "test", null);
-        assertEquals(collects ? List.of(free) : List.of(), collected);
+        // The JVM store reserves nothing here: the first token input; a session store skips the reserved one.
+        assertEquals(List.of(store instanceof HostStore ? free : reserved), collected);
     }
 
     @Test
@@ -1000,11 +1006,11 @@ class DevHostSeamsTest {
         var session = StateRuntime.builder(backend).chainTime(new Chain().time()).network(Networks.testnet())
                 .claimStore(store).build();
         var contract = new StateContractHandle<>(session, ContractSpec.described("test", "4100", 0, 0, 0, false));
-        var seedOf = StateContractHandle.class.getDeclaredMethod("seedOf", Account.class);
-        seedOf.setAccessible(true);
+        var seedFrom = StateContractHandle.class.getDeclaredMethod("seedFrom", Account.class);
+        seedFrom.setAccessible(true);
         // As if the reserved inputs were not there: the pure-ADA input among the first 50 eligible, not the first mixed.
-        assertEquals(Designation.ref(pure), Designation.ref((Utxo) seedOf.invoke(contract, payer)));
+        assertEquals(Designation.ref(pure), Designation.ref((Utxo) seedFrom.invoke(contract, payer)));
         all.remove(pure);
-        assertEquals(Designation.ref(mixed), Designation.ref((Utxo) seedOf.invoke(contract, payer)), "else the first eligible");
+        assertEquals(Designation.ref(mixed), Designation.ref((Utxo) seedFrom.invoke(contract, payer)), "else the first eligible");
     }
 }

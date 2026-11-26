@@ -316,6 +316,8 @@ None of these improves what a JS developer sees, so they wait for the prerequisi
 - **The page verifier must grow with the runtime** before M2 enables the corresponding features: composition,
   verifier withdrawals and Reward redeemers, additional contract inputs, sends and mints. Each comes with tamper
   tests (I5).
+- **The verifier's trust model** is §5's: it guards against the prepare service; the chain provider and the wallet
+  are trusted.
 - **Node version:** whatever runs the engines without flags. F10 shows Node 22 needs
   `--experimental-wasm-exnref`, so the CLI re-launches with it there (Q5).
 
@@ -368,11 +370,18 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 
 - **Trusted:**
   - the developer's machine and the toolchain they install (supply chain: npm provenance, tarball hashes; Q4);
-  - the page's bundle, which includes the runtime engine (served with SRI).
+  - the page's bundle, which includes the runtime engine (served with SRI);
+  - the chain provider the app chose (Blockfrost, Yaci Store, Ogmios, ...) and the wallet, as in any
+    cardano-client-lib or MeshJS app: the page and the Java runtime build transactions from the provider's UTxOs, and
+    the page verifier takes input values and datums from the provider (or the CIP-30 wallet). It needs no transaction
+    CBOR, so it works with what every supported provider serves. The provider must be reached directly or through a
+    host other than the prepare service's: a provider proxied by the service is as untrusted as the service. The rule
+    is about a remote prepare service: `joust dev` serving `/chain` and `/joust/service` from one host is fine, since
+    that host is the developer's own machine. What is still checked: protocol parameters are bounded by the page's limits (`maxFee`), and MerkleMap history and proofs
+    against on-chain roots. Keyed calls (ADR-0016 D11) still read script inputs from transaction CBOR where the
+    provider serves it, as before this decision. A mode that does not trust the provider is issue #169.
 - **Untrusted:**
-  - chain APIs and their snapshots: every answer feeding a transaction goes through the verifier's checks and the
-    ledger (ADR-0013 §9.4, §10.5);
-  - prepare services (ADR-0013 D2), unchanged;
+  - prepare services (ADR-0013 D2), unchanged: the page verifier stands between them and the wallet (I5);
   - descriptions or programs fetched at run time. The page bundles its own, so they are never fetched.
 - **What changes:** building transactions locally (D4) removes the prepare service from the path. A runtime bug is
   caught as before: by the verifier in front of the wallet (I5) and by the validator on chain.
@@ -830,6 +839,69 @@ direct `Tx` building, gated by S3.
     prepared Dex swap reproduced it on the JVM.
   - So the runtime collects only for key accounts (`caller instanceof WalletAccount` skips it). This is worth
     reporting to cardano-client-lib.
+  - **Corrected (#152).** The two build paths of `Tx` are the same; the double count was the runtime's own. A wallet's
+    prepare with a payout to the wallet also spends the wallet's largest UTxO, to give the change output the fee comes
+    from. When that UTxO is the one collected for the assets (a wallet's only UTxO), it was collected twice. QuickTx
+    keeps one input but counts its value twice in the change. Skipping the collection made a second bug: with a script
+    input fixed, QuickTx builds the change from the fixed inputs, and its fee selection asks only for lovelace. A wallet
+    whose tokens sit on a UTxO the selection does not pick then gets a negative token quantity in its change (the node
+    rejects it, "expected word"). Now the runtime collects asset UTxOs for wallets too, and never collects a UTxO twice.
+    The funding pick reuses an asset input, and each later call in a composition first counts what the inputs it
+    already spends hold. It never takes a UTxO with a reference script, nor one another keyed operation holds. It also
+    skips a UTxO with a datum hash: at a key address the ledger needs no datum, so this is a conservative choice, as
+    cardano-client-lib's selection makes. An inline datum at a key address is spendable as is, so tokens sent to a
+    wallet with one can be paid in (also when the provider gives the inline datum's hash beside it, as Yaci Store does). A creation's seed is never an input the composition already spends: a creation
+    after a call that paid assets from the caller's only UTxO is refused, while the other order works (the seed is
+    counted for the payment). It never takes one of the transaction's reference inputs (the call's reads are applied
+    before its assets are collected; in a composition, every call's reads from the first pass count), and every body,
+    prepared or submitted, is refused if it spends one of its reference inputs (the ledger's
+    `BabbageNonDisjointRefInputs`). Like every plain selection (`Designation`), it does not skip a UTxO an earlier, still-open prepare claims:
+    two such bodies conflict and at most one lands.
+  - **A caller that is not the payer** (a composition's co-caller, wallet or key account) gets back, at its own address,
+    what its collected inputs hold beyond the assets it pays in: one output with their lovelace and other tokens. The
+    payer funds the lovelace paid in and the fee. Before #152 a key co-caller's surplus went to the payer's change
+    (the runtime signed for it). A body, prepared or submitted, may take nothing else from a co-caller's address, and
+    an input whose provider gives no address is refused rather than assumed to be the payer's. Only the return the
+    runtime made counts as a co-caller's return (the output at the index it was appended at: its address, no datum, the
+    exact value recorded), and the check covers every co-caller the plan pays in for or returns to (the chain provider is
+    trusted for where an input is; #169 tracks a trustless mode); the return is exactly what the co-caller's inputs hold
+    less what it pays in: any other output there (a payout, a send, an intent's refund) is owed by someone else and
+    cannot cover a short return, and a larger return would give it the payer's value. The collateral is the payer's: every collateral input and the collateral return are at the payer's
+    address. A key-signed call with co-signers (`@Quorum`, `@AuthorizedBy`) is checked the same way. A return above
+    the ledger's maximum value size (inputs with many unrelated tokens) is refused, not split. A wallet's UTxOs keep
+    their reference script hash from CIP-30's CBOR, so one carrying a script is never spent for its tokens, taken as a
+    creation's seed (over every page of the listing), or designated by a keyed call (at another of the wallet's
+    addresses when the funding address has none; the engine then builds from that address). The DevKit wallet leaves out
+    a UTxO carrying a reference script (it knows only the hash, or with Ogmios perhaps only that there is one) and
+    reports datum hashes, an inline datum `00` included. QuickTx's own funding and collateral selection can still spend
+    a wallet UTxO carrying a reference script: tracked in #167. Whatever built the transaction, every page verifier
+    (single, keyed and composed calls, purposes, intents, a governor's registration) refuses one that spends, or puts
+    up as collateral, a wallet UTxO whose record carries a reference script (`referenceScriptHash`, or
+    `hasReferenceScript`) before the wallet signs: a prepare service could otherwise return its value as change while
+    the script is lost. The caller's and payer's listings (seeds, token payments, the
+    funding pick, keyed reservations and designated inputs) are read to their end (up to 10,000 pages, beyond which the read is
+    refused as incomplete). A page after the first that the provider fails to answer is an error, not the end; a
+    failed first page reads as an empty listing, and the refusal (a seed's, a token payment's, a keyed reservation's)
+    says the provider may not have answered; the funding pick then picks nothing, and the build selects as before. One check
+    reads it the other way on purpose: a keyed retry's "is the designated input still unspent" counts an unreadable
+    listing as spent, so nothing is rebuilt on a guess. A page designates a keyed input only at an address with the
+    caller's payment key, so the caller a contract records (an admin) stays the wallet's, and the page's verifier
+    requires the call's caller to be the payment key of the designated input's address (not just any key of the
+    wallet); with no such input the refusal names the funding address. Retries compare transaction
+    ids in any letter case. The engine's snapshot (fetched listings and a request's `walletUtxos`) and the DevKit helpers (`devkitMint`,
+    `devkitSweep`, the genesis top-up) never offer an output carrying a reference script for spending.
+  - **Every body handed to a wallet** (`PreparedTx`, a prepared publication, the engine's governor stake
+    registration) must balance per unit (`BodyBalance`):
+    inputs + mint + withdrawals + certificate refunds = outputs + fee + certificate deposits + proposal deposits +
+    donation. No quantity may be negative, zero (an asset) or outside the ledger's range, and no input may appear
+    twice; nor a map key twice (two withdrawals from one reward account, a policy or an asset name listed twice in a
+    value, in any spelling), which the bytes would keep once; nor an output or collateral return holding assets whose
+    value is above the protocol's maximum value size (and with no maximum known, such an output is refused). The
+    checks read a copy decoded from the body's bytes, which is what the wallet gets (and, for the runtime's own
+    key-signed submissions, what it signs and submits, value sizes included, publications too); an observer (`onBuilt`) gets a copy of its own and cannot
+    change either. A signed transaction reaches observers only after every check of its body passed; a refused one
+    reaches them without its signatures, so nothing an observer keeps can be submitted. Otherwise the body is refused. This is the runtime's self-check against bodies the ledger would reject. It
+    says nothing about where value goes: the wallet's net outflow is the page verifier's to bound (ADR-0013).
 - **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
   UTxOs apart by equality.
 - **`devkitSweep`** moves what contracts sent to the wallet key's enterprise address to its base address, as
@@ -859,11 +931,41 @@ direct `Tx` building, gated by S3.
     its target input, its one spend redeemer and its arguments, Ctx and offered assets, its mint (a destroy's burn,
     a minting method's own tokens), its continuation and datum.
   - It checks the transaction as a whole: inputs only the wallet's and the calls' targets, withdrawals only to the
-    pinned verifiers, signers, validity, fee, collateral, balance, the wallet's outflow at most the calls' payments
-    plus the fee, and what others receive at most what the scripts release.
+    pinned verifiers, signers, validity, fee, collateral, balance, and the wallet's outflow at most the calls'
+    payments plus the fee.
+  - **What others receive** is bounded by what the scripts release (the targets less the continuations, plus the
+    mint), less the payouts and claimed sends to the wallet, plus the payments the calls take. A payment counts only
+    as the redeemer binds it: lovelace where Ctx states it (`received`), assets where `assetsIn` names them. A method
+    that is not payable is paid none, and an adoption takes none. This bound is enough because every validator settles
+    its call exactly (I3, I8, I26: continuation = target + received + accepted + mint − payouts − sends, deposits
+    moving between composed calls): the release plus the payments is what the calls owe in payouts and sends, so
+    others receive what is owed to them and nothing of the wallet's. A purchase forwarding its price to the seller
+    (ADR-0011's Market.buy) is accepted this way; so is a payment split between a seller's payout and a refund.
+  - **Claims.** Sends claimed at wallet outputs are subtracted from what others may receive, as ADR-0013 §9.2 states
+    for one call (each claim's `by` the target of a call pinning that output verifier). An output claimed in two
+    registries is refused: when the calls pin different output verifiers, each checks distinct outputs only within its
+    own redeemer, so one output would deliver two sends. A deposit claim must come from the target of a composed call
+    that declares deposits and land on the continuation of a composed call that receives them: a receiver credits
+    every deposit claimed on its continuation, whatever its `by`.
+  - **Mints** are owned per policy. A name the protocol reserves (an instance's, an owned object's, an intent's, a
+    keyed object's) is a lifecycle token: only a composed destroy's burn of its own target or an adoption's mint of
+    its own. Any other unit is a user token whose policy's one mint redeemer must be `ByAction` naming the target of
+    a composed call under that policy whose method mints; that call owns the policy's mint (`mintMatches` checks a
+    destroy's burn and mint together). Outside its continuation only a called contract's reserved-name tokens are
+    refused; its user tokens are bounded per unit like any other asset.
+  - **Left to the validators:** rules they enforce on chain that do not bound the wallet's loss (I30 for claimed
+    outputs, claim order, deposit values, a repeated or self deposit, a collection's sends covering its rewards) are
+    not repeated in the page. An honest node refuses a body that breaks them at submission; at worst a block producer
+    could include it phase-2-invalid and take the collateral, which the page bounds by `limits.maxCollateral`.
+  - An owned destroy's and a move's input datum (the object's `Holding`) must name the call's instance: a consistency
+    check of the page's own call, alone too.
+  - The known limitation of ADR-0013 §9.2 crosses calls: the wallet's top-up of any call's send to the caller counts
+    against what all the calls release to others. fixtures/m0's recorded Market.buy is refused only by it (issue
+    #170). `test/recorded.test.js` verifies every recorded call and composition of `fixtures/m3` the page takes, so an
+    over-refusal of a recorded flow fails the suite.
   - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
     Deployments that deposit or receive now pin it.
-  - Spending calls only for now (no creations in a composition).
+  - Spending calls and adoptions (`@Migrate`, a creation inside a composition) compose; other creations do not.
   - **I5:** all 10 of the dApp's tamperings of a composed transaction are refused before signing.
   - **I3:** `fixtures/m3`, re-recorded, holds 69 calls (Fees' compositions included), all byte-identical on the JVM.
 - **Owned moves (ADR-0012 D3) through npm.** Guild passes on DevKit: a hero moves to another guild, which admits it
@@ -997,7 +1099,11 @@ direct `Tx` building, gated by S3.
     - **A delegation** is one stake delegation of the script's own credential to the page's pool, with the handler's
       Cert redeemer.
     - **A collection** withdraws exactly the balance from the script's credential with the page's `Rewards` redeemer
-      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn.
+      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn
+      beyond the handler's sends claimed at wallet outputs (each claim's `by` is `RewardRef(policy)`, I37; the
+      claims are decoded and checked as ADR-0013 §9.2 states; no deposit claims). As there, the wallet's top-up of a
+      send to it below the minimum ADA counts against what others may receive of the rewards. That the sends cover
+      the rewards (I37) is the withdrawal validator's check on chain. A zero balance has no sends.
     - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
       bounded collateral and validity; signers are the wallet's and the named co-signers.
   - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward

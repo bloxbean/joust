@@ -77,6 +77,8 @@ public final class VerifierHandle {
             return TxRunner.exportPrepared(runtime, "publish and register the JOUST " + label, claimed);
         } catch (ReservedInputException e) {
             throw e;
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);
         }

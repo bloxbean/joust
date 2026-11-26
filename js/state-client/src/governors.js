@@ -3,7 +3,7 @@
 // network; a call it approves withdraws zero from it, with the Approvals redeemer naming exactly that call. The page
 // checks the registration transaction before the wallet signs it, as it checks calls.
 
-import { DEFAULT_LIMITS, add, isWalletEnterprise } from './verify.js';
+import { DEFAULT_LIMITS, add, isWalletEnterprise, integrityChecks, scriptBearingChecks } from './verify.js';
 import { Data, decodeData, dataHex } from './pdata.js';
 import { parseTx, rewardAddress } from './ledger.js';
 import { hexToBytes } from './hex.js';
@@ -63,6 +63,7 @@ export function verifyRegistration(o) {
   } catch (e) {
     return { problems: ['not a transaction'] };
   }
+  scriptBearingChecks(tx, wallet, problems);
   const isWallet = (addr) => wallet.addresses.includes(addr) || isWalletEnterprise(addr, wallet);
   if (!tx.isValid) problems.push('is_valid is false');
   if (tx.hasVotes || tx.hasProposals) problems.push('votes or proposals');
@@ -71,6 +72,7 @@ export function verifyRegistration(o) {
   if (tx.mint.size) problems.push('a mint');
   if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   if (tx.redeemers.length > 0) problems.push('redeemers');
+  integrityChecks(tx, chain.params, problems);
   if (tx.plutusScripts > 0) problems.push('scripts');
   if (tx.collateral.length > 0 || tx.collateralReturn || tx.totalCollateral !== null) problems.push('collateral');
   // Validity: a short window, if any (a registration does not depend on time).

@@ -31,6 +31,15 @@ export function utxoJson(u) {
   };
 }
 
+/**
+ * Whether a listed output may be offered for spending (#165 Codex round 6): one that carries a reference script whose hash
+ * the provider could not give (Ogmios, a native script without CBOR) would reach the runtime looking like a plain UTxO,
+ * so a listing leaves it out. A lookup by reference (an output need) keeps it: it may be a reference input.
+ */
+export function spendableListed(u) {
+  return !(u.hasReferenceScript && !u.referenceScriptHash);
+}
+
 /** Fetches one need into {@code snapshot} from {@code source} (a provider, or blockfrostApi's raw API). */
 export async function fetchNeed(source, snapshot, kind, key) {
   const provider = asProvider(source);
@@ -46,13 +55,13 @@ export async function fetchNeed(source, snapshot, kind, key) {
       return;
     case 'utxos':
       // The complete set at the address, at this moment (D5: paging is the provider's).
-      snapshot.utxos[key] = (await provider.utxos(key)).map(utxoJson);
+      snapshot.utxos[key] = (await provider.utxos(key)).filter(spendableListed).map(utxoJson);
       return;
     case 'assetUtxos': {
       const [address, unit] = key.split('|');
       const list = provider.assetUtxos ? await provider.assetUtxos(address, unit)
         : (await provider.utxos(address)).filter((u) => u.value.some((a) => a.unit === unit && BigInt(a.quantity) > 0n));
-      snapshot.assetUtxos[key] = list.map(utxoJson);
+      snapshot.assetUtxos[key] = list.filter(spendableListed).map(utxoJson);
       return;
     }
     case 'output': {

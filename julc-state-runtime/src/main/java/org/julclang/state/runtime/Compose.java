@@ -75,7 +75,11 @@ public final class Compose {
         }
     }
 
-    /** Builds, checks, submits and confirms the one transaction; returns its hash. */
+    /**
+     * Builds, checks, submits and confirms the one transaction; returns its hash. The payer pays as for
+     * {@link #prepare()}: the runtime signs for every key caller, and a key co-caller's spent inputs come back to it
+     * less the native assets it pays in (before #152 they went to the payer's change).
+     */
     public String submit() {
         return (String) finish(false);
     }
@@ -84,6 +88,12 @@ public final class Compose {
      * Builds the composed transaction for a wallet to sign, without signing it (ADR-0013 D1). The payer and every
      * caller must be {@link WalletAccount}s: a call that needs a key held here (a co-signer, an authorization) is refused.
      * The checks {@code submit()} makes after balancing run here; the result carries the CBOR for CIP-30 {@code signTx}.
+     * <p>
+     * Who pays (T6): the payer funds every call's lovelace (what each call pays in, its sends' and payouts' minimum ADA)
+     * and the fee, whoever the call's caller is; the contract credits the caller. A caller other than the payer
+     * contributes only the native assets it pays in: the inputs collected from its address come back to it, less those
+     * assets, in one output at its address, and the composition is refused if that output would hold less than the
+     * ledger's minimum ADA. The body may take nothing else from it.
      */
     public PreparedTx prepare() {
         return (PreparedTx) finish(true);
@@ -193,11 +203,21 @@ public final class Compose {
         cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
+        // Every call's reads, from the first pass: no call collects for its assets what a later call reads (#165 Codex r8).
+        if (probe.tx instanceof TxRunner.RecordingTx r) cap.knownReads.addAll(r.readRefs);
         // A page's designated input (ADR-0016 D11) may be a call's own input (a creation's seed): spent once, after the calls.
         boolean late = designated != null && designated.given();
         if (designated != null && !late) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
         if (late && !cap.inputs.contains(designated.ref())) TxRunner.collect(cap.tx, designated.utxo(), null);
+        // Every output index the calls computed (state outputs, sends, deposits' claims) counts on cap.outputs: it must be
+        // the outputs the calls really added, or one of those indices is wrong (#165 Opus P3-2). Checked before the
+        // returns, which add to both counts, and again after them (#165 Codex r6, Fable P3-5).
+        requireCounted(cap);
+        // What the calls collected at a caller's address other than the payer's, less what they pay in, goes back there
+        // (T1): the payer's change would take it otherwise.
+        var coCallers = AssetTx.returnSurplus(runtime, cap, payer.baseAddress());
+        requireCounted(cap);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {
@@ -255,6 +275,9 @@ public final class Compose {
         var runner = new TxRunner(runtime, prepare ? List.of() : signers);
         runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
+        runner.assetInputs = cap.assetInputs;
+        runner.coCallers = new TxRunner.CoCallers(coCallers, java.util.Map.copyOf(cap.returns));
+        runner.otherCallers = cap.accounts.keySet().stream().anyMatch(a -> !a.equals(payer.baseAddress()));
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                     cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
@@ -264,6 +287,14 @@ public final class Compose {
         return runner.submit(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                 cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
                 cap.scripts.values().toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), "composed transaction");
+    }
+
+    /** The outputs counted are the outputs the calls added (#165 Opus P3-2, Codex r6). */
+    private static void requireCounted(TxRunner.Capture cap) {
+        if (cap.tx instanceof TxRunner.RecordingTx r && r.outputs != cap.outputs) {
+            throw new JoustException("composition: the calls added " + r.outputs + " outputs but counted " + cap.outputs
+                    + " (an output index would be wrong); refused");
+        }
     }
 
     /** Runs every call, even after one fails; returns the first failure. */

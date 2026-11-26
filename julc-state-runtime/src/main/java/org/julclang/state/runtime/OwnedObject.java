@@ -416,6 +416,8 @@ public final class OwnedObject<S, R> {
         Utxo ref = contract.findReferenceScript();
         var tx = TxRunner.collect(TxRunner.newTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
+        // The reads first: the asset collection never spends one of them (#165 Codex round 8).
+        call.applyReads(tx);
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         PlutusData datum = destroy ? null
                 : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), stored));
@@ -428,7 +430,6 @@ public final class OwnedObject<S, R> {
             if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
         }
         call.applyAuthorization(tx);
-        call.applyReads(tx);
         var scripts = new ArrayList<PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
         if (maps) scripts.add(contract.runtime.mapVerifier().script());

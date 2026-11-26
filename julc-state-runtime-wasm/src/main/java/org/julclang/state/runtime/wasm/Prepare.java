@@ -378,7 +378,7 @@ public final class Prepare {
         var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(call.path("script").asText());
         var params = new java.util.ArrayList<org.julclang.core.PlutusData>();
         for (JsonNode p : call.path("params")) {
-            params.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(java.util.HexFormat.of().parseHex(p.asText())));
+            params.add(org.julclang.state.runtime.PlutusBytes.decodeHex(p.asText()));
         }
         if (!params.isEmpty()) program = program.applyParams(params.toArray(new org.julclang.core.PlutusData[0]));
         var script = org.julclang.clientlib.JulcScriptAdapter.fromProgram(program);
@@ -396,6 +396,28 @@ public final class Prepare {
         return registration(r, new SnapshotBackend(Snapshot.fromJson(r.snapshot())), reward, call.path("address").asText());
     }
 
+    /**
+     * Handed to a wallet like the runtime's prepared bodies, a registration must balance per unit too (#152 F-W1). The
+     * snapshot answers each output alike to QuickTx and to this check (one object per reference), so this guards
+     * against the builder, not the chain reads (#165 reviewer3 R3-4).
+     */
+    static void checkRegistration(com.bloxbean.cardano.client.transaction.spec.Transaction built, SnapshotBackend backend) {
+        org.julclang.state.runtime.BodyBalance.check(built.getBody(), in -> {
+            try {
+                var o = backend.getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
+                return o.isSuccessful() ? o.getValue() : null;
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, () -> {
+            try {
+                return backend.getEpochService().getProtocolParameters().getValue();
+            } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+                throw new IllegalStateException(e);
+            }
+        }, "register the stake credential");
+    }
+
     /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
     private static Result registration(Request r, SnapshotBackend backend, String reward, String payer) throws Exception {
         var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
@@ -403,7 +425,9 @@ public final class Prepare {
                 .feePayer(payer)
                 .additionalSignersCount(1);
         if (r.scope() != null) context.validTo(r.scope().ceiling());
-        var built = context.build();
+        // Checked and handed out as its bytes hold it, as the runtime's prepared bodies are (#165 Opus P3).
+        var built = org.julclang.state.runtime.BodyBalance.readBack(context.build(), "register the stake credential");
+        checkRegistration(built, backend);
         byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
         return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),
                 com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, r.scope() == null ? -1 : built.getBody().getTtl(),

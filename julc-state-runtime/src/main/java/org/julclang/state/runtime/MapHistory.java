@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.plutus.spec.RedeemerTag;
 import com.bloxbean.cardano.vds.core.api.NodeStore;
 import com.bloxbean.cardano.vds.mpf.MpfTrie;
 import org.julclang.core.PlutusData;
-import org.julclang.core.cbor.PlutusDataCborDecoder;
 import org.julclang.state.runtime.snapshot.SuppliedProver;
 import org.julclang.state.api.mpf.MapWitnesses;
 import org.julclang.state.api.mpf.Mpf;
@@ -66,7 +65,7 @@ public final class MapHistory {
             if (!HEX.formatHex(Blake2bUtil.blake2bHash256(cbor)).equals(red.getRedeemerDataHash())) {
                 throw new JoustException("the chain API served other data for redeemer " + red.getRedeemerDataHash());
             }
-            out.addAll(claims(PlutusDataCborDecoder.decode(cbor)));
+            out.addAll(claims(PlutusBytes.decode(cbor)));   // the bytes just hashed
         }
         return out;
     }
@@ -79,7 +78,7 @@ public final class MapHistory {
     public static void replay(NodeStore store, List<byte[]> redeemers) {
         var all = new ArrayList<Claim>();
         for (byte[] redeemer : redeemers) {
-            var decoded = PlutusDataCborDecoder.decode(redeemer);
+            var decoded = PlutusBytes.decode(redeemer);
             var typed = SuppliedProver.decodeClaims(decoded);
             for (var claim : typed.claims()) if (!MapWitnesses.verify(claim))
                 throw new JoustException("invalid map history proof");
