@@ -199,8 +199,9 @@ export async function packument(registry, name, { newPackage = false, ...options
   let document;
   try {
     document = await response.json();
-  } catch {
-    fail(`GET ${url}: the answer is not JSON`);
+  } catch (e) {
+    // The read's timeout also covers the body.
+    fail(`GET ${url}: ${e.name === 'TimeoutError' ? `no whole answer within ${timeoutMs / 1000} s` : 'the answer is not JSON'}`);
   }
   return checkDocument(document, name);
 }

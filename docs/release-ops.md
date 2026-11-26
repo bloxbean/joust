@@ -305,10 +305,11 @@ same way (`0.1.0-pre23` published after `0.1.0` goes to `release-0.1`, not `prev
 summary lists the tag chosen for each package (under "Dist-tags (dry run; nothing published)" when `npm_publish` is
 false) and, after a publication, the dist-tags the registry then reports.
 
-The registry's answer is checked before it is used: exactly HTTP 200 (any other status stops the job), a document for that package with at least one version and a `latest` tag, every version and tag holder a
-version string within npm's limits (at most 256 characters, every number a safe integer), every holder among the
-versions. Anything else stops the job. The job installs one exact npm (11.21.1, checked by SHA-256; trusted publishing
-needs 11.5.1 or later), and reads `npm pack --json` in both npm 11's and npm 12's shapes.
+The registry's answer is checked before it is used: exactly HTTP 200 (any other status stops the job), a document for
+that package with at least one version and a `latest` tag, every version and tag holder a version string within npm's
+limits (at most 256 characters, every number a safe integer), every holder among the versions. Anything else stops the
+job. The job installs one exact npm (11.21.1, checked by SHA-256; trusted publishing needs 11.5.1 or later), and reads
+`npm pack --json` in both npm 11's and npm 12's shapes.
 
 **A 404 stops the job.** Every JOUST package is already on npm, so a 404 is a registry or CDN fault: read as "not
 published yet", it would turn every guard off and could move `latest` backwards (a later `0.2.0-pre1` onto `latest` over

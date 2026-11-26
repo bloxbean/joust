@@ -341,6 +341,11 @@ describe('the registry', () => {
       const [path] = req.url.split('?');
       req.url = path;
       if (req.url === '/silent') return; // never answers
+      if (req.url === '/stalled') { // headers and part of the body, then nothing
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"name":');
+        return;
+      }
       // A 404 the first time it is asked, then the document (a CDN fault that clears).
       if (req.url === '/flaky' && reads.filter((r) => r.startsWith('/flaky?')).length === 1) {
         res.writeHead(404).end('{}');
@@ -414,9 +419,11 @@ describe('the registry', () => {
     assert.notEqual(mine[0], mine[1]);
     await assert.rejects(packageTag(registry, 'silent', '0.1.0', null, { timeoutMs: 200 }),
       /GET .*\/silent: no answer within 0\.2 s/);
+    await assert.rejects(packageTag(registry, 'stalled', '0.1.0', null, { timeoutMs: 200 }),
+      /GET .*\/stalled: no whole answer within 0\.2 s/);
   });
 
-  test('an error or a malformed answer fails closed; only a 404 is "not published"', async () => {
+  test('an error or a malformed answer fails closed, never "not published"', async () => {
     for (const n of ['tagsonly', 'empty', 'nullbody', 'errorbody', 'noversions', 'nolatest', 'arraytag']) {
       await assert.rejects(packageTag(registry, n, '2.0.0-pre1'), DistTagError, n);
     }
