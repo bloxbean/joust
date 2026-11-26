@@ -1,0 +1,26 @@
+[
+  {
+    "id": "@julclang/state-client@0.1.0-pre3",
+    "name": "@julclang/state-client",
+    "version": "0.1.0-pre3",
+    "size": 198,
+    "unpackedSize": 75,
+    "shasum": "e7adf1882b2f846ea7eb78ce2afc4874a78749e8",
+    "integrity": "sha512-Fb7STP9P0q3kyLPuc76wTRZv2k38G0KmRDW4qATOECQcT/dQ+qpNGuwbySS4VT3/q9zn5HEdtCIxlPe7rJDi7Q==",
+    "filename": "julclang-state-client-0.1.0-pre3.tgz",
+    "files": [
+      {
+        "path": "index.js",
+        "size": 2,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 73,
+        "mode": 420
+      }
+    ],
+    "entryCount": 2,
+    "bundled": []
+  }
+]
