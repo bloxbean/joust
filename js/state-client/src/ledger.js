@@ -8,6 +8,7 @@
 import { Serialization, Cardano } from '@cardano-sdk/core';
 import { decodeData } from './pdata.js';
 import { hexToBytes, bytesToHex } from './hex.js';
+import { blake2b } from '@noble/hashes/blake2.js';
 
 export class LedgerError extends Error {}
 
@@ -99,6 +100,14 @@ export function parseTx(hex) {
     hasDonation: !!b.donation,
     hasTreasuryValue: b.treasuryValue !== undefined,
     plutusScripts: (c.witness.scripts ?? []).filter((s) => s.__type === 'plutus').length,
+    // What the body's script integrity hash commits to (Conway): the witness set's redeemers and datums as the
+    // transaction encodes them, how many there are, and the languages of its Plutus scripts (verify.js integrityChecks).
+    integrity: {
+      parts: integrityParts(hex),
+      redeemerCount: redeemers.length,
+      datumCount: tx.witnessSet().plutusData()?.values().length ?? 0,
+      languages: [...new Set((c.witness.scripts ?? []).filter((s) => s.__type === 'plutus').map((s) => `PlutusV${s.version + 1}`))],
+    },
   };
 }
 
@@ -136,7 +145,53 @@ export function ledgerTx(hex) {
     if (ref) r.scriptRef.view = scriptView(ref.toCore());
   });
   view.integrityParts = integrityParts(hex);
+  // ADR-0024 M1: the size of each output's value as the body encodes it (the ledger's max_val_size), and the auxiliary
+  // data's own bytes (its hash is of them, never of a re-encoding).
+  view.rawOutputs.forEach((r, i) => { r.valueSize = valueSize(outs[i].toCbor()); });
+  const collateralReturn = tx.body().collateralReturn();
+  view.collateralReturnValueSize = collateralReturn ? valueSize(collateralReturn.toCbor()) : null;
+  view.auxiliaryDataCbor = auxiliaryDataCbor(hex);
   return view;
+}
+
+/** The encoded size (bytes) of an output's value: field 1 of a post-Alonzo map, element 1 of a legacy array. */
+function valueSize(outputHex) {
+  const r = new Serialization.CborReader(hexToBytes(outputHex));
+  if (r.peekState() === Serialization.CborReaderState.StartArray) {
+    r.readStartArray();
+    r.readEncodedValue();                                   // the address
+    return r.readEncodedValue().length;
+  }
+  const n = r.readStartMap();
+  for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
+    const key = Number(r.readInt());
+    const value = r.readEncodedValue();
+    if (key === 1) return value.length;
+  }
+  throw new LedgerError('an output without a value');
+}
+
+/** The transaction's auxiliary data as it encodes them (hex), or null: [body, witnesses, is_valid, aux | null]. */
+function auxiliaryDataCbor(hex) {
+  const r = new Serialization.CborReader(hexToBytes(hex));
+  const n = r.readStartArray();
+  r.readEncodedValue();                                     // the body
+  r.readEncodedValue();                                     // the witness set
+  let left = n === null ? Infinity : n - 2;
+  while (left-- > 0 && r.peekState() !== Serialization.CborReaderState.EndArray) {
+    const state = r.peekState();
+    if (state === Serialization.CborReaderState.Boolean) { r.readBoolean(); continue; }        // is_valid
+    if (state === Serialization.CborReaderState.Null) { r.readNull(); return null; }
+    return bytesToHex(r.readEncodedValue());
+  }
+  return null;
+}
+
+/** blake2b-256 of hex bytes (hex): the auxiliary data hash. */
+export async function blake2b256(hex) {
+  const crypto = await import('@cardano-sdk/crypto');
+  await crypto.ready();
+  return crypto.blake2b.hash(hex, 32);
 }
 
 /** A script as the in-memory ledger reads it: { hash, kind: native | PlutusV1 | PlutusV2 | PlutusV3, size, native? }. */
@@ -152,9 +207,13 @@ function integrityParts(hex) {
   r.readStartArray();
   r.readEncodedValue();                                     // the body
   const parts = { redeemers: null, datums: null };
+  const seen = new Set();
   const n = r.readStartMap();
   for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
     const key = Number(r.readInt());
+    // One reading of the witness set: the hash covers these bytes, and the verifiers read the SDK's parse of them.
+    if (seen.has(key)) throw new LedgerError(`the witness set repeats key ${key}`);
+    seen.add(key);
     const value = bytesToHex(r.readEncodedValue());
     if (key === 5) parts.redeemers = value;
     if (key === 4) parts.datums = value;
@@ -171,6 +230,11 @@ const LANGUAGE_IDS = { PlutusV1: 0, PlutusV2: 1, PlutusV3: 2 };
  * form) is not computed: null is returned with {@code unsupported}.
  */
 export async function scriptIntegrityHash(parts, languages, costModels) {
+  return integrityHashOf(parts, languages, costModels);
+}
+
+/** scriptIntegrityHash, synchronously (blake2b-256 by @noble/hashes): what the page verifiers check a body against. */
+export function integrityHashOf(parts, languages, costModels) {
   if (!parts.redeemers && !parts.datums) return { hash: null };
   const langs = [...new Set(languages)].sort((a, b) => LANGUAGE_IDS[a] - LANGUAGE_IDS[b]);
   if (langs.includes('PlutusV1')) return { hash: null, unsupported: 'PlutusV1 language views' };
@@ -184,9 +248,7 @@ export async function scriptIntegrityHash(parts, languages, costModels) {
     for (const c of costs) w.writeInt(BigInt(c));
   }
   const views = bytesToHex(w.encode());
-  const crypto = await import('@cardano-sdk/crypto');
-  await crypto.ready();
-  return { hash: crypto.blake2b.hash((parts.redeemers ?? 'a0') + (parts.datums ?? '') + views, 32) };
+  return { hash: bytesToHex(blake2b(hexToBytes((parts.redeemers ?? 'a0') + (parts.datums ?? '') + views), { dkLen: 32 })) };
 }
 
 /**
@@ -294,14 +356,20 @@ export function poolKeyHash(pool) {
 
 // ---------------------------------------------------------------------------------------------------- CIP-30 values
 
-/** A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value }. */
+/**
+ * A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value, inlineDatum, datumHash,
+ * referenceScriptHash }. The reference script's hash is kept (#165 Codex): a runtime never spends a wallet UTxO carrying
+ * one for its tokens (it would consume a deployment's script), and knows it only from this.
+ */
 export function unspentOutput(hex) {
   const u = Serialization.TransactionUnspentOutput.fromCbor(hex);
   const [input, output] = u.toCore();
   const datum = u.output().datum();
   const inline = datum?.asInlineData?.();
+  const script = u.output().scriptRef();
   return { ref: refOfCore(input), address: output.address, value: valueOf(output.value),
-    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null };
+    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null,
+    referenceScriptHash: script ? script.hash() : null };
 }
 
 /** The base address of a payment and a stake credential (bech32). */
@@ -347,12 +415,16 @@ export function valueCbor(value) {
   return Serialization.Value.fromCore(coreValue(value)).toCbor();
 }
 
-/** A UTxO ({ ref, address, value, inlineDatum? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
+/** A UTxO ({ ref, address, value, inlineDatum?, datumHash? }) as CIP-30's CBOR hex of TransactionUnspentOutput. */
 export function unspentOutputCbor(u) {
   const [txId, index] = u.ref.split('#');
-  const output = { address: Cardano.PaymentAddress(u.address), value: coreValue(u.value) };
-  if (u.inlineDatum) output.datum = Serialization.PlutusData.fromCbor(u.inlineDatum).toCore();
-  return Serialization.TransactionUnspentOutput.fromCore([{ txId: Cardano.TransactionId(txId), index: Number(index) }, output]).toCbor();
+  const core = { address: Cardano.PaymentAddress(u.address), value: coreValue(u.value) };
+  if (!u.inlineDatum && u.datumHash) core.datumHash = u.datumHash;   // as a wallet reports it, so it is not taken for a plain UTxO
+  const output = Serialization.TransactionOutput.fromCore(core);
+  // From its own CBOR (#165 Codex round 5): the sdk's fromCore drops a core datum that is falsy (the integer 0, `00`).
+  if (u.inlineDatum) output.setDatum(Serialization.Datum.newInlineData(Serialization.PlutusData.fromCbor(u.inlineDatum)));
+  const input = Serialization.TransactionInput.fromCore({ txId: Cardano.TransactionId(txId), index: Number(index) });
+  return new Serialization.TransactionUnspentOutput(input, output).toCbor();
 }
 
 /** A CIP-30 witness set (CBOR hex) holding one vkey witness. */

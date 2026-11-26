@@ -105,6 +105,10 @@ class OutcomeClassTest {
         var cooling = Prepare.failed(new RuntimeException("prepare failed",
                 org.julclang.state.runtime.KeyedObjectsAccess.notYet("Registry.change", 1240)));
         assertEquals(1240, cooling.retryAtSlot());
+        var data = Prepare.JSON.readTree(cooling.outcome());
+        assertEquals("cooldown", data.required("code").asText());
+        assertEquals(1240, data.required("retryAtSlot").longValue());
+        assertTrue(Prepare.JSON.readTree(failed.outcome()).required("retryAtSlot").isNull());
     }
 
     @Test

@@ -177,6 +177,57 @@ export declare class JoustObject {
 export declare function httpService(baseUrl: string, o?: { fetchImpl?: typeof fetch }): Service;
 export declare function blockfrostChain(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): Chain;
 export declare function verifyPrepared(o: unknown): Promise<{ problems: string[]; report: Report }>;
+
+/** The anchors a publication is checked against: the verified snapshot's, never the host's deployment. */
+export interface PublicationAnchors {
+  description: any;
+  policy: Hex;
+  address: string;
+  language: string;
+  outputVerifier?: { hash: Hex; language: string; address: string };
+  mapVerifier?: { hash: Hex; language: string; address: string };
+}
+export type PublicationKind = 'referenceScript' | 'stakeRegistration' | 'verifier';
+/** A `prerequisites` entry the page asked to publish, or its ID ("kind:scriptHash"). */
+export type PublicationPrerequisite = string | { id: string; kind?: string; target?: string; present?: unknown };
+export interface PublicationExpected {
+  id: string; kind: string; scriptHash: Hex; language: string | null;
+  /** The holder address (bech32) for a publication with a script, else null. */
+  target: string | null;
+  holder: boolean; registration: boolean;
+  credential: { type: 'script'; hash: Hex } | null;
+  rewardAddress: string | null;
+  shared: boolean;
+}
+export declare const PUBLICATION_KINDS: PublicationKind[];
+export declare function publicationExpectation(o: { prerequisite: PublicationPrerequisite; anchors: PublicationAnchors; networkId: number }):
+  { problems: string[]; expected: PublicationExpected };
+/**
+ * Protocol 1's check of a `publish` result before the wallet signs it (D13; ADR-0024 D7 step 3). Problems are
+ * "<code>/<check>: why" with the conformance kit's check ids; violations are their codes. Empty problems: sign.
+ */
+export declare function verifyPublication(o: {
+  prepared: { cbor: Hex; txHash: Hex; validFrom?: Int | null; validTo?: Int | null; signers?: Hex[] };
+  prerequisite: PublicationPrerequisite;
+  anchors: PublicationAnchors;
+  /** The contract asked about (fully qualified); checked against the description's title when given. */
+  contract?: string;
+  /** The wallet's payer address (bech32): the publish request's `address`. */
+  payer: string;
+  networkId: number;
+  /** The slot and window the page sent with `publish`. */
+  now: Int;
+  ttlSlots: Int;
+  chain: {
+    params: Record<string, any>;
+    utxo(ref: string): Promise<{ address: string; value: Map<string, bigint> } | null>;
+    /** The script hashes at a holder address, or null when the provider did not answer. */
+    scriptsAt(address: string): Promise<Hex[] | null>;
+    registration(scriptHash: Hex): Promise<boolean | 'unknown' | null>;
+  };
+  limits?: { maxFee?: Int };
+}): Promise<{ problems: string[]; violations: string[]; expected?: PublicationExpected; fee?: bigint; deposit?: bigint;
+  holders?: Array<{ address: string; lovelace: bigint; minimum: bigint }> }>;
 /** Plutus data without a ledger library (pdata.js). */
 export type PlutusData = { constr: number; fields: PlutusData[] } | { int: bigint } | { bytes: Uint8Array } | { list: PlutusData[] }
   | { map: Array<[PlutusData, PlutusData]> };
@@ -192,3 +243,32 @@ export declare function txHash(cbor: Hex): Hex;
 export declare function toJson(v: unknown): unknown;
 export declare function instanceIdOf(txHash: Hex, index: number): Hex;
 export declare function objectIdOf(txHash: Hex, index: number): Hex;
+
+/** A snapshot UTxO (ADR-0015's encoding, as protocol 1's reads carry it). */
+export interface SnapshotUtxo {
+  tx_hash: Hex; output_index: number; address: string; amount: Array<{ unit: string; quantity: string | number }>;
+  data_hash?: Hex | null; inline_datum?: Hex | null; reference_script_hash?: Hex | null;
+}
+/**
+ * Protocol 1's D13 check of a dev host's `prepare` or `publish` result before signing (ADR-0024 I2): the conformance
+ * kit's ReferenceChecker in JavaScript. The input has the verifier vectors' shape; only `result` is the host's, every
+ * other field is the client's own (its request, its pinned anchors, the trusted chain's UTxOs and parameters). Never
+ * throws; empty problems: the body may be reviewed and signed. A call touching a MerkleMap field is refused
+ * (notVerifiable): map claims are not checked here.
+ */
+export declare function verifyHostResult(input: {
+  method: 'prepare' | 'publish';
+  request: { now: Int; ttlSlots: Int; call?: Record<string, any>; contract?: string; prerequisite?: string; address?: string };
+  networkId: number;
+  maxFee: Int;
+  anchors: PublicationAnchors;
+  resolved: Record<string, SnapshotUtxo>;
+  node?: { scriptsAt: Record<string, Hex[]>; registrations: Record<Hex, boolean | 'unknown'> };
+  clock?: { zeroSlot: Int; zeroTimeMs: Int; slotLengthMs: Int };
+  protocolParams: Record<string, any>;
+  result: { prepared: Record<string, any> };
+}): { problems: string[]; sites: string[];
+  report?: { plan: Record<string, any>; walletNet: Record<string, string>; signers: Hex[]; created: Hex | null;
+    before: unknown; after: unknown; removed: boolean } };
+/** Plutus data from hex as the pinned JuLC decoder reads it (byte strings of at most 64 bytes per chunk); throws. */
+export declare function plutusData(hex: Hex): unknown;

@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <ul>
  *   <li>one {@link UplcTransitions} with its {@link TransitionInputs}, shared by 16 threads over steps, refusals, VM
  *       errors and malformed inputs (Counter and the test-only Probe);</li>
- *   <li>{@link Prepare} itself (its contract cache), preparing the 34 recorded dApp calls from 8 threads at once, each
+ *   <li>{@link Prepare} itself (its contract cache), preparing the 25 recorded dApp calls from 8 threads at once, each
  *       byte-identical to its recording.</li>
  * </ul>
  */
@@ -106,6 +106,6 @@ class ConcurrencyTest {
             for (var f : futures) bad.addAll(f.get());
             assertEquals(List.of(), bad);
         }
-        System.out.println("[D11] " + 8 * 34 + " concurrent prepares on 8 threads, each byte-identical to its recording");
+        System.out.println("[D11] " + 8 * 25 + " concurrent prepares on 8 threads, each byte-identical to its recording");
     }
 }

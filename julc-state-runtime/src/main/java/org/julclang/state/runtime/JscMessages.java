@@ -62,6 +62,15 @@ public final class JscMessages {
         return m == NONE ? null : m;
     }
 
+    /**
+     * The message map of {@code spec}'s contract (ADR-0018 D12) as the runtime reads it for its refusals, a copy; null
+     * for a contract without one (written in Java). For tools that show it (ADR-0022 D5's {@code describe}).
+     */
+    public static JsonNode messageMap(ContractSpec<?> spec) {
+        JsonNode m = map(spec.validatorClass(), spec.name());
+        return m == null ? null : m.deepCopy();
+    }
+
     /** The text of the one copy in {@code copies}; null when there is none or more than one (never a guess). */
     static String only(List<java.net.URL> copies) throws java.io.IOException {
         if (copies.size() != 1) return null;
@@ -81,10 +90,59 @@ public final class JscMessages {
         return best;
     }
 
+    /**
+     * One {@code .jsc} site of a refusal, as the message map gives it (ADR-0022 D9: structured, before any text is made
+     * of it). {@code file} is the site's own file (an imported library's) or the map's source; {@code kind} is the map's
+     * ({@code require}, {@code pay}, {@code input}, ...); {@code in} the function; {@code what} the parameter of an
+     * {@code input} site, else null.
+     */
+    public record Site(String file, int line, int col, String kind, String in, String what) implements java.io.Serializable {
+        /** The site as refusal messages show it: {@code File.jsc:line:col (what)}. */
+        public String text() {
+            return file + ":" + line + ":" + col + " (" + describe(kind, in, what) + ")";
+        }
+    }
+
+    /**
+     * A {@link RequireException} whose message names its {@code .jsc} sites, with the sites themselves and the
+     * contract's own message: what {@link #explained} raises when a refusal has sites. Its message is exactly the text
+     * it always was.
+     */
+    public static final class Refusal extends RequireException {
+        private final String trace;
+        private final List<Site> sites;
+
+        Refusal(String trace, List<Site> sites, String message) {
+            super(message);
+            this.trace = trace;
+            this.sites = List.copyOf(sites);
+        }
+
+        /** The contract's own refusal message (the trace), before the sites were appended. */
+        public String trace() {
+            return trace;
+        }
+
+        /** The {@code .jsc} sites, in the map's order, without duplicates. */
+        public List<Site> sites() {
+            return sites;
+        }
+    }
+
     /** The {@code .jsc} sites of {@code message} in contract {@code name}'s map: {@code File.jsc:line:col (what)}. */
     public static List<String> sites(Class<?> anchor, String name, String message) {
-        JsonNode map = map(anchor, name);
         var out = new LinkedHashSet<String>();
+        for (Site s : structuredSites(anchor, name, message)) out.add(s.text());
+        return new ArrayList<>(out);
+    }
+
+    /** The {@code .jsc} sites of {@code message} in contract {@code name}'s map, as values (ADR-0022 D9); empty when none. */
+    public static List<Site> structuredSites(Class<?> anchor, String name, String message) {
+        return structuredSites(map(anchor, name), message);
+    }
+
+    private static List<Site> structuredSites(JsonNode map, String message) {
+        var out = new LinkedHashSet<Site>();
         if (map == null || !map.has("messages")) return new ArrayList<>(out);
         var keys = new ArrayList<String>();
         map.get("messages").fieldNames().forEachRemaining(keys::add);
@@ -93,27 +151,36 @@ public final class JscMessages {
         String source = map.path("source").asText();
         for (JsonNode s : map.get("messages").get(best)) {
             // A site in an imported .jsc library names its file (ADR-0018 D9, M4).
-            out.add((s.hasNonNull("file") ? s.path("file").asText() : source) + ":" + s.path("line").asInt() + ":" + s.path("col").asInt()
-                    + " (" + describe(s) + ")");
+            out.add(new Site(s.hasNonNull("file") ? s.path("file").asText() : source, s.path("line").asInt(), s.path("col").asInt(),
+                    s.path("kind").asText(), s.path("in").asText(), s.path("what").isMissingNode() ? null : s.path("what").asText()));
         }
         return new ArrayList<>(out);
     }
 
-    private static String describe(JsonNode s) {
-        String in = s.path("in").asText();
-        return switch (s.path("kind").asText()) {
-            case "input" -> "the parameter " + s.path("what").asText() + " of " + in + " is not a well-formed input";
+    private static String describe(String kind, String in, String what) {
+        return switch (kind) {
+            case "input" -> "the parameter " + (what == null ? "" : what) + " of " + in + " is not a well-formed input";
             case "pay" -> "a payout in " + in + " is negative";
             case "require" -> "a require in " + in;
             default -> "in " + in;
         };
     }
 
-    /** {@code e}, or a {@link RequireException} with the same message followed by its {@code .jsc} sites. */
+    /**
+     * {@code e}, or a {@link RequireException} with the same message followed by its {@code .jsc} sites (a
+     * {@link Refusal}, which also carries the sites as values).
+     */
     public static RuntimeException explained(Class<?> anchor, String name, RequireException e) {
-        List<String> sites = sites(anchor, name, e.getMessage());
-        if (sites.isEmpty()) return e;
-        var x = new RequireException(e.getMessage() + " [" + String.join("; ", sites) + "]");
+        return explained(map(anchor, name), e);
+    }
+
+    /** Explain a described contract using its in-memory build artifact. */
+    public static RuntimeException explained(JsonNode map, RequireException e) {
+        List<Site> structured = structuredSites(map, e.getMessage());
+        if (structured.isEmpty()) return e;
+        var text = new LinkedHashSet<String>();
+        for (Site s : structured) text.add(s.text());
+        var x = new Refusal(e.getMessage(), structured, e.getMessage() + " [" + String.join("; ", text) + "]");
         x.initCause(e);
         return x;
     }

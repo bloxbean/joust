@@ -32,6 +32,9 @@ export async function devkitTopUp(address, ada, adminUrl = 'http://localhost:100
   await payFromGenesis(o.chain, address, BigInt(ada) * 1_000_000n);
 }
 
+/** A plain transaction's funding never spends an output carrying a reference script (#165 Codex round 6). */
+const plain = (utxos) => utxos.filter((u) => !u.referenceScriptHash && !u.hasReferenceScript);
+
 /** Signs {@code txHex} with {@code wallet} (CIP-30), submits and waits; returns the hash. */
 async function signAndSubmit(chain, wallet, txHex) {
   const signed = assemble(txHex, await wallet.signTx(txHex, true));
@@ -59,7 +62,7 @@ async function payFromGenesis(chain, to, lovelace) {
   const params = await chain.params();
   for (let i = 0; i < 20; i++) {
     const w = devWallet({ chain, index: i });
-    const utxos = await chain.utxosAt(w.address);
+    const utxos = plain(await chain.utxosAt(w.address));
     const have = utxos.reduce((s, u) => s + (u.value.get('lovelace') ?? 0n), 0n);
     if (have < lovelace + 5_000_000n) continue;
     const tx = buildPlainTx({ inputs: largestFirst(utxos, lovelace + 3_000_000n), outputs: [{ address: to, value: new Map([['lovelace', lovelace]]) }],
@@ -79,7 +82,7 @@ export async function devkitMint(...args) {
   const [chain, wallet, name, quantity] = typeof args[0]?.utxosAt === 'function' ? args : args.slice(1);
   const policy = singleKeyPolicy(wallet.keyHash);
   const unit = policy + Array.from(new TextEncoder().encode(name), (b) => b.toString(16).padStart(2, '0')).join('');
-  const utxos = await chain.utxosAt(wallet.address);
+  const utxos = plain(await chain.utxosAt(wallet.address));
   const tx = buildPlainTx({ inputs: largestFirst(utxos, 5_000_000n), change: wallet.address, params: await chain.params(),
     mint: { keyHash: wallet.keyHash, assets: new Map([[unit, BigInt(quantity)]]) } });
   await signAndSubmit(chain, wallet, tx);
@@ -94,10 +97,10 @@ export async function devkitMint(...args) {
 export async function devkitSweep(...args) {
   const [chain, wallet] = typeof args[0]?.utxosAt === 'function' ? args : args.slice(1);
   const ent = enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0);
-  const utxos = await chain.utxosAt(ent);
+  const utxos = plain(await chain.utxosAt(ent));
   if (!utxos.length) return null;
   // The fee (and the change's minimum ADA) from the wallet's largest base-address UTxO.
-  const base = largestFirst(await chain.utxosAt(wallet.address), 1n);
+  const base = largestFirst(plain(await chain.utxosAt(wallet.address)), 1n);
   const tx = buildPlainTx({ inputs: [...utxos, ...base], change: wallet.address, params: await chain.params() });
   return signAndSubmit(chain, wallet, tx);
 }

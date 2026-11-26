@@ -159,10 +159,9 @@ public final class KeyedList<S, R> {
         var c = contract();
         var out = new TreeMap<String, Listed<R>>();
         try {
-            for (int page = 1; page <= 1_000; page++) {
-                var r = c.runtime.backend().getUtxoService().getUtxos(c.address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
+            var walk = new Pages(c.runtime, c.address, 100, 1_000);
+            for (var list = walk.next(); list != null; list = walk.next()) {
+                for (Utxo u : list) {
                     Listed<R> l = validate(u);
                     if (l == null) continue;
                     if (out.put(HexUtil.encodeHexString(l.node().key()), l) != null) {
@@ -170,7 +169,6 @@ public final class KeyedList<S, R> {
                                 + HexUtil.encodeHexString(l.node().key()) + " held twice");
                     }
                 }
-                if (r.getValue().size() < 100) break;
             }
         } catch (JoustException e) {
             throw e;
@@ -258,6 +256,12 @@ public final class KeyedList<S, R> {
             }
             if (type.signedKey() && !Arrays.equals(key, callerPkh)) {
                 throw new RequireException(what + ": the key must be the caller's key hash (signedKey, I53)");
+            }
+            // A host's reserved, not yet final transaction that inserts, burns or relinks this key's token decides it
+            // first: a rollback or settlement can change the listing, so the caller waits, before the duplicate and the
+            // cooldown checks (#156 Codex review).
+            if (rt.hostedCall() && rt.claimStore().reservesToken(unit(key))) {
+                throw new CallScope.Refusal("pending", what + ": key " + keyHex + " is held by a transaction that is not final");
             }
             var all = listing();
             Listed<R> anchor = predecessor(all, keyHex);

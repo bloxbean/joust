@@ -3,7 +3,8 @@
 #   joust          js/joust's src/lsp/select.js, src/build.js, src/toolchain.js (stryker.config.mjs; worker-limits' two
 #                  slow heap cases skipped)
 #   joust-heap     js/joust's src/toolchain-heap.js, with every case (stryker.heap.config.mjs)
-#   state-client   js/state-client's verifiers src/verify.js, src/keyed.js (stryker.state-client.config.mjs)
+#   state-client   js/state-client's verifiers src/verify.js, src/keyed.js, src/claims.js, src/compose.js, src/purposes.js and
+#                  the ledger reader they share, src/ledger.js (stryker.state-client.config.mjs)
 # JOUST_STRYKER_SETS (space-separated) runs only those sets: CI runs each set as its own job.
 # A set runs whole when the change touches what decides whether its mutants die: js/mutation/** (its `all`, testFiles,
 # SLOW_CASES and tap arguments), these scripts or the baseline files (review r4, Codex C14, security S14), or when a file

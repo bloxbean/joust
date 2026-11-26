@@ -86,7 +86,8 @@ class DescribedReplayTest {
             }
         }
         assertEquals(List.of(), diffs);
-        assertTrue(vectors.size() >= 30, "recorded prepares: " + vectors.size());
+        // fixtures/m0/dapp: the page's flow records 25 prepares since the serverless demo was dropped (ADR-0020 §12.3).
+        assertTrue(vectors.size() >= 25, "recorded prepares: " + vectors.size());
         var sorted = ms.stream().sorted().toList();
         System.out.println("[M1a] " + vectors.size() + " recorded prepares (Counter, Bank) byte-identical through descriptions and"
                 + " transition programs; prepare: first " + ms.get(0) + " ms, median " + sorted.get(sorted.size() / 2) + " ms");
@@ -103,7 +104,11 @@ class DescribedReplayTest {
 
     @Test
     void refusalsAndNeeds() throws Exception {
-        var contracts = List.of(contract("counter"));
+        var c = contract("counter");
+        var contracts = List.of(new Prepare.Contract(c.description(), c.script(), c.transitions(), c.manifest(), """
+                {"source":"lib/Counter.jsc","messages":{"increment must be positive":[
+                 {"line":8,"col":3,"in":"increment","kind":"require"}]}}
+                """));
         JsonNode fixture = null;
         try (var files = Files.list(FIXTURES.resolve("dapp"))) {
             for (Path f : files.sorted().toList()) {
@@ -122,6 +127,11 @@ class DescribedReplayTest {
         var refused = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(refused.ok());
         assertEquals("increment must be positive", refused.error());
+        JsonNode outcome = JSON.readTree(refused.outcome());
+        assertEquals("require", outcome.required("code").asText());
+        assertEquals(JSON.readTree("""
+                [{"file":"lib/Counter.jsc","line":8,"col":3,"kind":"require","in":"increment","what":null}]
+                """), outcome.required("sites"));
         // ADR-0018 D12 (r12, review r1 C4): the refusal names the contract whose map explains it.
         assertEquals(call.get("contract").asText(), refused.refusedBy());
         assertNull(need(contracts, fixture).refusedBy(), "only a refusal names a contract");

@@ -44,7 +44,7 @@ remove it).
 
 ## What JOUST publishes
 
-**Maven** (`org.julclang`, `publishedModules` in `build.gradle`): eight modules, each with a jar, sources, javadoc,
+**Maven** (`org.julclang`, `publishedModules` in `build.gradle`): nine modules, each with a jar, sources, javadoc,
 POM and Gradle module file, all signed. `julc-state-api` adds its `onchain` jar (the on-chain sources for consumers'
 annotation processor path). `julc-state-gradle-plugin` is published by `java-gradle-plugin` (its `pluginMaven`
 publication, not `mavenJava`) together with the plugin marker `org.julclang.joust:org.julclang.joust.gradle.plugin`,
@@ -58,6 +58,8 @@ which `bloxbean-maven.sh discover` counts on top of the projects (ADR-0017 D1).
 | `julc-state-testkit` | `StateHarness` and the attack suite |
 | `julc-state-verifier` | the MerkleMap verifier |
 | `julc-state-dsl` | the `.jsc` DSL |
+| `julc-state-serve` | the transport-independent adapter over generated clients (ADR-0022 D16), used by the prepare service |
+| `julc-state-host` | the JVM stdio dev host (ADR-0022) |
 | `julc-state-server` | the prepare service |
 | `julc-state-gradle-plugin` | the Gradle plugin `org.julclang.joust` (+ its plugin marker) |
 
@@ -256,10 +258,11 @@ Each must be `true` or `false`; `release.yml` refuses a missing or misspelled fl
 was still `true` (from the JuLC snapshot days) while the publish flags were on. JuLC is now pinned to a release, so it
 is `false`. A tag is permanent: the next release needs a new version (e.g. `-rc5`).
 
-**JuLC.** JOUST depends on JuLC `0.1.0-pre21-rc1` (`julc` in `gradle/libs.versions.toml`), a release in the BloxBean
-release repository (`https://repo.bloxbean.org/maven/releases`), **not on Maven Central**. A JOUST version published to
-Central therefore resolves for consumers only with the BloxBean release repository added (as the README shows), until
-the JuLC version it names is on Central too.
+**JuLC.** JOUST depends on JuLC `0.1.0-pre22` (`julc` in `gradle/libs.versions.toml`) and cardano-client-lib
+`0.8.0-pre8`, the version that JuLC release depends on. Both are on Maven Central; JuLC is also in the BloxBean release
+repository (`https://repo.bloxbean.org/maven/releases`). Pin JuLC releases only: a release candidate such as
+`0.1.0-pre21-rc1` is in the BloxBean release repository but **not on Maven Central**, so a JOUST version published to
+Central that names one resolves for consumers only with the BloxBean release repository added.
 
 ## Rehearsal
 
@@ -391,7 +394,7 @@ version bump's commit before approving its tag.
   -PstagingRepository=$PWD/build/r2-maven -PskipSigning=true
 V=$(./gradlew -q properties | awk '/^version:/ {print $2; exit}')
 bash -c "python3 .github/scripts/verify-maven-staging.py build/r2-maven none org/julclang $V \
-  julc-state-api julc-state-dsl julc-state-processor julc-state-runtime julc-state-server julc-state-testkit \
+  julc-state-api julc-state-dsl julc-state-processor julc-state-runtime julc-state-serve julc-state-host julc-state-server julc-state-testkit \
   julc-state-verifier"
 MAVEN_USERNAME=x MAVEN_PASSWORD=x ./gradlew nmcpZipAggregation -PskipSigning=true    # build/nmcp/zip/aggregation.zip
 for p in state-client joust-runtime joust create-joust; do (cd js/$p && npm pack --dry-run); done

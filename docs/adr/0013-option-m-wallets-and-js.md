@@ -282,6 +282,15 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
 
 - **`data.js`** turns JSON into CSL `PlutusData` and back, by schema. Maps are encoded in canonical key order.
   `dataEqual` compares Data structurally, whatever the CBOR encoding.
+- **The trust model.** The page verifier checks a transaction that a remote prepare service built, and that
+  service is untrusted. The chain provider the app chose (Blockfrost, Yaci Store, Ogmios, ...) and the wallet are
+  trusted, as in any cardano-client-lib or MeshJS app: the page and the Java runtime already build transactions from
+  the provider's UTxOs. So an input's value and datum are the provider's (or the CIP-30 wallet's) answer, and the
+  verifier needs no transaction CBOR (keyed calls, ADR-0016 D11, still read it where the provider serves it, as
+  before). The provider must not be reached through the prepare service's host: proxied by the service, it is as
+  untrusted as the service. That rule is about a remote prepare service: `joust dev` serving `/chain` and
+  `/joust/service` from one host is fine, since that host is the developer's own machine. Defending against a lying
+  provider is out of scope for JOUST (ADR-0015 §5; issue #169).
 - **`verify.js` generalises `page.mjs`.** The page does not recompute the next state: the pinned validator already
   enforces `datum == method(state, args)`. It checks that the transaction makes exactly the call it asked for and
   that the wallet risks nothing else:
@@ -306,9 +315,44 @@ The processor writes `META-INF/joust/<package>.<Contract>.json` for every contra
     - wallet outputs carry no datum, except a payout tag naming the target;
     - exactly one continuation (none for a destroy), decoded for display;
     - outputs to other parties are allowed and listed in the review, but only up to what the script releases
-      (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet. A payout to
-      the wallet can thus never hide the wallet's own funds going elsewhere (r4);
-    - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
+      (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet and its
+      claimed sends to the wallet (below), plus the payment the call takes. A payout to the wallet can thus never hide
+      the wallet's own funds going elsewhere (r4). The payment counts only as the redeemer binds it (lovelace where
+      Ctx states it, assets where `assetsIn` names them), and a method that is not payable is paid none. The validator
+      settles the call exactly, so the release plus the payment is what the call owes in payouts and sends: a purchase
+      may forward its price to the seller (ADR-0015 §13.8 states the rule, the same for one call and a composition).
+      An owned destroy's input datum must be a `Holding` naming the call's instance (a consistency check);
+    - **claimed sends** (ADR-0007 D5): when the transaction withdraws zero from the deployment's pinned output
+      verifier, the page decodes that withdrawal's `OutputClaims` redeemer (its Reward redeemer, by the withdrawal's
+      ledger index). Every claim must name an output of the transaction and, as `by`, the target the transaction
+      spends; anything else (another shape, a malformed claim, an output out of range, another `by`) is refused. The
+      output verifier and the validators check the rest on chain (claim order, I30). A single call carries no
+      deposit claims (a deposit needs its receiver in the same composition, ADR-0011 D3). On chain a send to the
+      wallet accepts any output at its address that covers it, so a claim could name the wallet's own change: every
+      claimed output at a wallet address is the script's send to the wallet, never its change, and its whole value is
+      subtracted, as tagged payouts are, from what others may receive. That bound is what protects the wallet: every
+      continuation's value is exact on chain, so value the body does not pay to others or as the fee comes back to
+      the wallet. The net outflow below is unchanged.
+    - **Known limitation** (claimed sends): the whole claimed output is subtracted, including the lovelace the
+      wallet adds to bring a send to the caller up to the output's minimum ADA (the runtime tops up any send below its
+      min-UTxO floor: a token send without lovelace, or a small lovelace send), because the page cannot tell it from
+      lovelace the script sends. So a call with such a send that also pays lovelace the script releases to others (a
+      fee to a third party, say) is refused unless the send carries at least its own minimum ADA from the script
+      (`Assets.lovelace(min)` with the tokens). Transactions without the output verifier's withdrawal are verified
+      as before;
+    - no output pays the wallet's payment key at an address the wallet does not use (another stake key);
+    - no output carries another of the contract's reserved-name tokens (an instance's, an owned object's, an intent's,
+      a keyed object's) than the continuing one; the contract's user tokens are bounded per unit like any other asset.
+  - **Mints:** a minting method mints only user tokens under the pinned policy, never a reserved name, with one
+    `ByAction` redeemer naming its target; a destroy burns exactly its token, under `BurnInstance`, or under that
+    `ByAction` when its method also mints (the policy's `mintMatches` checks the burn and the mint together).
+  - **The body commits to what the page read:** the wallet signs the body only, and the body commits to the witness
+    set's redeemers and datums through its script integrity hash. The page reads the call, the claims and the
+    approvals from the witness set, so it recomputes that hash from the witness set's own bytes (the languages of its
+    Plutus scripts and PlutusV3, over the chain API's cost models) and refuses a mismatch, a hash with nothing to
+    commit to, and a chain API that gives no cost model. Else whoever holds the signed body could submit it with other
+    redeemers. Wrong cost models can only refuse: the hash binds the reviewed redeemers and the cost models together.
+    Every page verifier checks it (single and keyed calls, compositions, purposes, registrations, intents).
   - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
     signature: the e2e test found a tampering that added an unfunded output.
   - **The wallet's net outflow** is at most the fee plus the payment (for a creation, plus the new UTxO, itself at

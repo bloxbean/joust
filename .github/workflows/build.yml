@@ -86,6 +86,9 @@ jobs:
           if dupes or missing or extra:
               print(f"::error::devnet-shards.txt: in several shards {dupes}; in no shard {missing}; no DevKit tests {extra}")
               raise SystemExit(1)
+          if any(':julc-state-host:test' in line and len(line) > 1 for line in lines):
+              print("::error::devnet-shards.txt: :julc-state-host:test needs a shard of its own (a fresh chain)")
+              raise SystemExit(1)
           shards = [{'index': i + 1, 'tasks': ' '.join(line)} for i, line in enumerate(lines)]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('shards=' + json.dumps(shards) + '\n')
@@ -213,8 +216,12 @@ jobs:
 
       # Everything `./gradlew build -PnoDevnet` runs (the fuzz targets' replays included), but the short fuzz runs, which
       # the next step makes with libFuzzer's statistics logged.
+      # ADR-0022 I10: the dev host's tests run under strace in a network namespace (.github/scripts/trace-dev-host.sh).
+      - name: Install strace (dev-host trace)
+        run: command -v strace || { sudo apt-get update -q && sudo apt-get install -y -q strace; }
+
       - name: Build and test (no DevKit)
-        run: ./gradlew build -PnoDevnet -PnoFuzz --continue --stacktrace
+        run: ./gradlew build -PnoDevnet -PnoFuzz -PjoustHostTrace --continue --stacktrace
 
       # gradle/jazzer-fuzz.gradle's fuzzShort (part of `build` without -PnoFuzz), each public target for 30 s: the IR readers
       # and NODE_OPTIONS. -Pfuzz.public leaves out the decoders of on-chain data (ValueAdapter, AddressAdapter, the memos),
@@ -441,12 +448,33 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/setup-js.sh
+          ./gradlew :julc-state-host:nodeHostConformance
           # #130 r1 (design D3): migrate was removed with .jsc v1 (#111); M5d's fmt and write-regular run here.
           (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
             test/fmt.test.js test/libraries.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js \
             test/write-regular.test.js)
           (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
             test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
+
+      # ADR-0024 M1: the offline playground of an npm project. Its server over this commit's npm dev host and a
+      # memoryLedger (sessions, the server's token/Host/Origin surface, stale builds, isolation, no network), its forms,
+      # and its page in Chromium: the Counter walkthrough in Java and .jsc. Chromium is required here, never skipped.
+      # M3 without a DevKit: DevKit sessions over a chain the test holds back or refuses (settlement, the journal, I4).
+      # Playwright is installed beside the repository and linked in, so js/node_modules (setup-js) is not pruned.
+      - name: Test the playground
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+        run: |
+          set -euo pipefail
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+          (cd js/joust && ../../scripts/node-test.sh joust-playground --test-concurrency=1 test/playground.test.js \
+            test/playground-devkit.test.js)
 
       # A skipped case here is a security case not run (review r2, design F16): libraries, migrate, worker-limits and
       # keyed-window skip when an engine or a fixture is missing. Every case of this job's suites must run.
@@ -470,10 +498,70 @@ jobs:
   # generated Gradle projects built from this commit's modules and plugin only; joust new -t node isolated from hostile
   # npm configuration (with controls that must fail); an npm project built through the native joust with this commit's
   # engines, giving the Gradle projects' description.
+  # ADR-0024 M3: the playground on a real Yaci DevKit, with this commit's engines and npm dev host: joust playground
+  # --mode devkit in Chromium (a test identity and an injected CIP-30 wallet, a wrong-network wallet refused) and joust
+  # dev's /playground/. DevKit and Chromium are required (JOUST_REQUIRE_*): neither skips silently, nor does any case.
+  playground-devkit:
+    needs: engines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000 (.github/ci/devkit.sh); boots meanwhile.
+      - name: Start Yaci DevKit
+        run: |
+          npm install -g --ignore-scripts @bloxbean/yaci-devkit@0.12.0
+          .github/ci/devkit.sh start
+
+      - name: Download the engines
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: engines
+          path: js
+
+      - name: Check the engines' digests and set up the npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd js && sha256sum -c engines.sha256)
+          bash scripts/setup-js.sh
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+
+      - name: Wait for Yaci DevKit
+        run: |
+          .github/ci/devkit.sh wait
+          .github/ci/devkit.sh monitor
+
+      - name: Test the playground on DevKit
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+          JOUST_REQUIRE_DEVKIT: '1'
+        run: |
+          set -euo pipefail
+          (cd js/joust && ../../scripts/node-test.sh joust-playground-devkit --test-concurrency=1 test/playground-devkit-e2e.test.js)
+
+      - name: No case skipped
+        run: python3 scripts/junit-no-skips.py build/npm-test-results/*.xml
+
   cli:
     needs: engines
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -538,6 +626,36 @@ jobs:
         run: >-
           bash .github/scripts/joust-cli-e2e.sh julc-state-cli/build/native/nativeCompile/joust
           "$RUNNER_TEMP/staging" "$RUNNER_TEMP/e2e"
+
+      # ADR-0024 M2: the playground in Gradle projects. The JVM host's launch, client side (the spec, the private
+      # snapshot, the digest, links and FIFOs refused); `joust new` Gradle Counters (Java and .jsc) against the staged
+      # repository, walked through in Chromium and compared step by step with the npm walkthrough (I11); a rebuild during
+      # a session (I6); the .jsc ABI gate (I10); and the native joust's playground from its per-user cache, installed from
+      # this commit's npm tarballs (the page prebuilt, as release.yml ships it). Gradle and Chromium are required here.
+      - name: Test the Gradle playground
+        shell: bash
+        env:
+          JOUST_REQUIRE_CHROMIUM: '1'
+          JOUST_REQUIRE_GRADLE: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/setup-js.sh
+          node js/joust/scripts/build-playground.mjs
+          tgz="$RUNNER_TEMP/playground-npm"
+          mkdir -p "$tgz"
+          for p in state-client joust-runtime joust; do npm pack "./js/$p" --ignore-scripts --pack-destination "$tgz" >/dev/null; done
+          pw="$RUNNER_TEMP/playwright"
+          mkdir -p "$pw" js/joust/node_modules
+          (cd "$pw" && npm init -y >/dev/null && npm install --no-audit --no-fund --ignore-scripts playwright@1.64.1 \
+            && npx playwright install --with-deps chromium)
+          ln -sfn "$pw/node_modules/playwright" js/joust/node_modules/playwright
+          ln -sfn "$pw/node_modules/playwright-core" js/joust/node_modules/playwright-core
+          export JOUST_PLAYGROUND_GRADLE_REPO="$RUNNER_TEMP/staging"
+          export JOUST_CLI="$GITHUB_WORKSPACE/julc-state-cli/build/native/nativeCompile/joust"
+          JOUST_PLAYGROUND_TARBALLS="$(ls "$tgz"/*.tgz | paste -sd: -)"
+          export JOUST_PLAYGROUND_TARBALLS
+          (cd js/joust && ../../scripts/node-test.sh joust-playground-gradle --test-concurrency=1 test/playground-gradle.test.js)
+          python3 scripts/junit-no-skips.py build/npm-test-results/joust-playground-gradle.xml
 
   # ADR-0021 D9, D11, D12: the VS Code extension packaged from this commit's engine, checked (no native code, under
   # 16 MB, the engine's digests), and tested with @vscode/test-electron on the minimum and the current VS Code: the
@@ -955,7 +1073,11 @@ jobs:
       - name: DevKit tests
         env:
           TASKS: ${{ matrix.shard.tasks }}
-        run: ./gradlew $TASKS -PdevnetOnly --continue --stacktrace
+        # The dev host's end-to-end test needs a fresh chain: its shard holds nothing else (plan checks that).
+        run: |
+          extra=()
+          if [ "$TASKS" = ":julc-state-host:test" ]; then extra+=(-PjoustHostE2e); fi
+          ./gradlew $TASKS -PdevnetOnly "${extra[@]}" --continue --stacktrace
 
       # Per-module test time (to rebalance .github/ci/devnet-shards.txt) and every skipped test: DevKit tests skip
       # themselves when a prerequisite is missing, which would otherwise pass silently.

@@ -34,6 +34,7 @@ const COMMANDS = {
   test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
+  playground: 'playground [--mode offline|devkit] [--network <name>] [--port <port>] [--accept-abi] [--accept-lock] [--no-open]   build, then a browser playground for every contract: identities, forms, an offline ledger or Yaci DevKit (ADR-0024); in a Gradle project: ./gradlew build joustHostSpec and the JVM dev host',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
   version: 'version                     this joust\'s version',
   help: 'help [<command>]            this help',
@@ -82,9 +83,14 @@ async function project() {
     return 2;
   }
   if (p.kind === 'gradle') {
-    console.error(`joust: ${p.root} is a Gradle build; this is the npm joust. Use ./gradlew (or the native joust:`
-      + ' brew install bloxbean/tap/joust).');
-    return 2;
+    // ADR-0024 D3: the playground is the one command of this package a Gradle build runs (the native joust runs it from
+    // its per-user cache); it builds through the build's own ./gradlew.
+    if (cmd !== 'playground') {
+      console.error(`joust: ${p.root} is a Gradle build; this is the npm joust. Use ./gradlew (or the native joust:`
+        + ' brew install bloxbean/tap/joust).');
+      return 2;
+    }
+    process.chdir(p.root);
   }
   if (p?.kind === 'npm') {
     const own = resolveJoust(p.root);
@@ -201,6 +207,25 @@ async function project() {
       const stop = async () => { await d.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
+      return undefined;   // keeps running
+    }
+    case 'playground': {
+      // ADR-0024 D3: offline by default (it never attaches to or starts a network); --mode devkit on a Yaci DevKit only.
+      const { playground } = await import('../src/playground/index.js');
+      let p;
+      try {
+        p = await playground({ config, mode: flag('mode') ?? 'offline', networkName: flag('network'),
+          port: flag('port') ? Number(flag('port')) : undefined, acceptAbi: args.includes('--accept-abi'),
+          acceptLock: args.includes('--accept-lock'), open: !args.includes('--no-open') });
+      } catch (e) {
+        console.error(e.message);
+        return 1;
+      }
+      const stop = async () => { await p.close(); process.exit(0); };
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+      process.on('SIGHUP', stop);   // a closed terminal stops it as Ctrl-C does (the journal's lock released)
       return undefined;   // keeps running
     }
     case 'test': {

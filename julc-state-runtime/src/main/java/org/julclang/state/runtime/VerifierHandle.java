@@ -69,21 +69,43 @@ public final class VerifierHandle {
                 .registerStakeAddress(rewardAddress)
                 .from(payerAddress);
         try {
-            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime, null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
-            var claimed = Designation.build(payerAddress, null, ctx::build);
+            var claimed = Designation.build(runtime.claimStore(), payerAddress, null, ctx::build);
             return TxRunner.exportPrepared(runtime, "publish and register the JOUST " + label, claimed);
+        } catch (ReservedInputException e) {
+            throw e;
+        } catch (BodyBalance.UnbalancedException e) {
+            throw e;   // the runtime refused its own body: not a build failure (R4)
         } catch (Exception e) {
             throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);
         }
+    }
+
+    public enum Component { SCRIPT, REGISTRATION, BOTH }
+
+    /** Builds exactly the selected components, with the upper bound in place before balancing. */
+    public PreparedTx prepare(String payerAddress, long validTo, List<Utxo> holderOutputs, Component component) {
+        var tx = new Tx();
+        java.util.Objects.requireNonNull(component, "publication component");
+        if (component != Component.REGISTRATION) {
+            if (Publication.present(holderOutputs, holder, hash)) {
+                if (component == Component.SCRIPT) return null;
+                throw new IllegalArgumentException("combined publication requires an absent reference script");
+            }
+            tx.payToAddress(holder, List.of(Amount.lovelace(deposit())), script);
+        }
+        if (component != Component.SCRIPT) tx.registerStakeAddress(rewardAddress);
+        return Publication.build(runtime, payerAddress, validTo, tx);
     }
 
     /** The verifier's reference script, publishing it (and registering its stake credential) first if needed. */
     public Utxo ensure(Account payer) {
         Utxo found = find();
         if (found != null) return found;
+        if (runtime.hostedCall()) throw new CallScope.Refusal("prerequisite", "missing reference script at " + holder);
         var tx = new Tx()
                 .payToAddress(holder, List.of(Amount.lovelace(deposit())), script)
                 .registerStakeAddress(rewardAddress)
@@ -115,27 +137,44 @@ public final class VerifierHandle {
         tx.readFrom(ref).withdraw(rewardAddress, BigInteger.ZERO, PlutusDataAdapter.convert(redeemer));
     }
 
+    /** How far a scoped call looks for a pinned reference: a bound on a hostile answer, not a policy. */
+    static final int PIN_PAGES = 10_000;
+
     private Utxo find() {
-        if (reference != null) return reference;
+        if (runtime.hostedCall()) return runtime.hostedReference(holder, hash);
+        // ADR-0022 D8: a scoped (hosted) call sees only its own answers, so it neither reads nor fills the cache that
+        // unscoped callers keep; a rollback between two calls cannot hand the second call the first call's hit.
+        boolean scoped = runtime.callScope() != null;
+        if (!scoped && reference != null) return reference;
         var pinned = runtime.referenceScript(hash);
-        if (pinned != null && holder.equals(pinned.getAddress())) {
+        if (pinned != null && !holder.equals(pinned.getAddress())) pinned = null;
+        if (pinned != null && !scoped) {
             reference = pinned;
             return pinned;
         }
+        // A scoped call trusts only this call's answers: a pin is used once the answer shows it (a rollback may have
+        // removed it since the runtime was built; #145 Codex review), else the answer's own reference script.
+        Utxo first = null;
         try {
-            var r = runtime.backend().getUtxoService().getUtxos(holder, 20, 1);
-            if (r.isSuccessful() && r.getValue() != null) {
-                for (Utxo u : r.getValue()) {
-                    if (hash.equalsIgnoreCase(u.getReferenceScriptHash())) {
-                        reference = u;
+            // Unscoped, the first page, as always; a scoped call, or one looking for a pin, every page until the answer runs
+            // out: absence must be the answer's, not a page cut (#145 Codex).
+            // Scoped, a failed page is a failed read, not the end of the answer: absence would publish a copy (Pages).
+            var walk = new Pages(runtime, holder, 20, scoped || pinned != null ? PIN_PAGES : 1);
+            for (var list = walk.next(); list != null; list = walk.next()) {
+                for (Utxo u : list) {
+                    if (!hash.equalsIgnoreCase(u.getReferenceScriptHash())) continue;
+                    if (pinned == null) {
+                        if (!scoped) reference = u;
                         return u;
                     }
+                    if (Designation.ref(u).equals(Designation.ref(pinned))) return u;
+                    if (first == null) first = u;
                 }
             }
         } catch (Exception e) {
             throw new JoustException("cannot look up the " + label, e);
         }
-        return null;
+        return first;
     }
 
     private BigInteger deposit() {
