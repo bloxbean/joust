@@ -21,19 +21,19 @@
   --line-strong: #c7cfe0;
   --text: #0b1533;
   --text-2: #33406a;
-  --muted: #66718f;
-  --accent: #0a8da1;
-  --accent-soft: rgba(10, 141, 161, .1);
+  --muted: #5a6582;
+  --accent: #086b7b;
+  --accent-soft: rgba(8, 107, 123, .1);
   --accent-ink: #ffffff;
   --primary: #0a1433;
   --primary-ink: #ffffff;
-  --gold: #b7791f;
+  --gold: #8a5a0c;
   --gold-soft: rgba(214, 158, 46, .14);
-  --ok: #138a5e;
+  --ok: #0c6b48;
   --ok-soft: rgba(19, 138, 94, .11);
-  --warn: #b26a00;
+  --warn: #8c5200;
   --warn-soft: rgba(229, 152, 0, .13);
-  --err: #c8334f;
+  --err: #b0233f;
   --err-soft: rgba(200, 51, 79, .1);
   --shadow: 0 1px 2px rgba(11, 21, 51, .05), 0 6px 24px rgba(11, 21, 51, .06);
   --shadow-lg: 0 30px 80px rgba(6, 12, 32, .35);
@@ -248,13 +248,13 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 #identities li:hover { border-color: var(--line-strong); }
 #identities li.signer { border-color: color-mix(in srgb, var(--gold) 60%, transparent); background: linear-gradient(135deg, var(--gold-soft), var(--surface-2) 70%); }
 .avatar { grid-row: span 3; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; font-weight: 750; font-size: 15px; color: #fff; }
-.avatar.c0 { background: linear-gradient(135deg, #1fb6c9, #145ea8); }
-.avatar.c1 { background: linear-gradient(135deg, #8b6cf6, #4b3bc4); }
-.avatar.c2 { background: linear-gradient(135deg, #f0a43a, #c2552b); }
-.avatar.c3 { background: linear-gradient(135deg, #3fcf8e, #157a5c); }
-.avatar.c4 { background: linear-gradient(135deg, #f06292, #a4265a); }
-.avatar.c5 { background: linear-gradient(135deg, #64b5f6, #3b5bdb); }
-.avatar.wallet { background: linear-gradient(135deg, #22e4e6, #0a1433); }
+.avatar.c0 { background: linear-gradient(135deg, #0e7490, #0c3f7a); }
+.avatar.c1 { background: linear-gradient(135deg, #6d4fe0, #3f2fb0); }
+.avatar.c2 { background: linear-gradient(135deg, #b45309, #8a3412); }
+.avatar.c3 { background: linear-gradient(135deg, #047857, #065f46); }
+.avatar.c4 { background: linear-gradient(135deg, #c2185b, #880e4f); }
+.avatar.c5 { background: linear-gradient(135deg, #2f62c9, #2b45a8); }
+.avatar.wallet { background: linear-gradient(135deg, #0e7490, #0a1433); }
 .who { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; font-weight: 600; }
 .who input { margin: 0; }
 .who strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -273,7 +273,7 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 
 /* ---- contracts */
 .nav { display: flex; flex-direction: column; gap: 4px; }
-button.contract { width: 100%; justify-content: flex-start; text-align: left; padding: 9px 11px; background: transparent; border-color: transparent; font-weight: 600; }
+button.contract { width: 100%; justify-content: flex-start; text-align: left; padding: 9px 11px; background: transparent; border-color: transparent; font-weight: 600; white-space: normal; }
 button.contract:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line); }
 button.contract.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--text); }
 button.contract .glyph { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-3); color: var(--accent); font-size: 12px; font-weight: 800; flex: none; }
@@ -299,7 +299,7 @@ pre.state { background: var(--code-bg); border: 1px solid var(--line); border-ra
 .signing-as strong { color: var(--text); }
 .operation { display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; transition: border-color .12s, transform .12s; min-width: 0; }
 .operation:hover { border-color: var(--line-strong); }
-.operation.disabled { opacity: .62; }
+.operation.disabled > :not(.badge) { opacity: .62; }
 .operation h4 { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; color: var(--text); font-family: var(--mono); font-weight: 650; }
 .operation .kind { font-family: var(--font); font-size: 10.5px; font-weight: 700; letter-spacing: .05em; padding: 2px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); }
 .operation .kind.k-init, .operation .kind.k-keyedInit, .operation .kind.k-ownedInit { color: var(--ok); background: var(--ok-soft); }
@@ -322,21 +322,24 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-weight:
 pre.view-result:empty { display: none; }
 pre.view-result { background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 8px 10px; }
 
-/* ---- the review (a modal over the page; the page refuses a second action while it is open) */
-.review:not([hidden]) {
-  position: fixed; z-index: 50; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto;
+/* ---- the review: a modal <dialog> (showModal), so the page behind it is inert while a body is under review */
+.review {
+  width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; color: var(--text);
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 18px; padding: 22px 24px;
-  box-shadow: 0 0 0 100vmax var(--scrim), var(--shadow-lg); animation: pop .16s ease-out;
+  box-shadow: var(--shadow-lg);
 }
-@keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
+.review[open] { animation: pop .16s ease-out; }
+.review::backdrop { background: rgba(4, 8, 22, .62); backdrop-filter: blur(2px); }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.review h3:focus { outline: none; }
+.review h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .review h3 { font-size: 18px; display: flex; align-items: center; gap: 10px; }
 .review h3::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
 .review .lead { color: var(--muted); font-size: 13px; margin: 6px 0 14px; }
 .review table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
 .review th, .review td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
 .review tr:last-child th, .review tr:last-child td { border-bottom: 0; }
-.review th { width: 30%; font-weight: 600; font-size: 12.5px; color: var(--muted); background: var(--surface-2); white-space: nowrap; }
+.review th { width: 30%; font-weight: 600; font-size: 12.5px; color: var(--muted); background: var(--surface-2); overflow-wrap: break-word; }
 .review td code { white-space: pre-wrap; color: var(--text); }
 .review tr.highlight th, .review tr.highlight td { background: var(--accent-soft); }
 .review tr.highlight td code { font-weight: 650; }

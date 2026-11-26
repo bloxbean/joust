@@ -316,6 +316,7 @@ async function startSession(opts = {}) {
     state.contract = null;
     $('contract-title').textContent = 'Choose a contract';
     for (const id of ['operations', 'instances', 'objects']) $(id).replaceChildren();
+    drawContracts();
   }
   note(`session ${state.session.session} started (${state.session.mode}, build ${state.session.fingerprint.slice(0, 12)}…)`);
   for (const p of state.session.pruned ?? []) {
@@ -565,7 +566,7 @@ async function selectContract(name) {
     name.includes('.') ? h('span', { class: 'pkg', text: name }) : null, ' ',
     h('span', { class: 'chip', title: 'the contract address (derived from the pinned build)' }, h('b', { text: 'address' }),
       copyable(address, { head: 16, tail: 8, label: 'Copy the contract address' })));
-  drawContracts();
+  for (const b of document.querySelectorAll('#contracts button.contract')) b.classList.toggle('active', b.dataset.contract === name);
   await drawInstances();
   drawOperations();
 }
@@ -590,8 +591,7 @@ async function drawInstances() {
     h('div', { class: 'inst-head' },
       h('button', { class: 'instance', 'data-instance': it.instance, title: it.instance, text: it.instance.slice(0, 16) + '…',
         onclick: () => guard(async () => { state.instance = it.instance; await drawInstances(); drawOperations(); }) }),
-      it.instance === state.instance ? h('span', { class: 'selected-tag', text: 'SELECTED' })
-        : h('span', { class: 'muted', text: 'select' })),
+      it.instance === state.instance ? h('span', { class: 'selected-tag', text: 'SELECTED' }) : null),
     h('pre', { class: 'state', text: show(it.value) })));
   const foreign = listing.items.length - items.length;
   fill(box, h('ul', {}, rows), foreign ? h('p', { class: 'muted', text: `${foreign} other output(s) at the contract address (reference scripts, foreign or old outputs)` }) : null,
@@ -976,9 +976,16 @@ function approval({ title, lines, states, predicted, who }) {
   if (state.replaying) return Promise.resolve(true);
   return new Promise((resolve) => {
     const panel = $('review');
-    const done = (ok) => () => { panel.hidden = true; panel.replaceChildren(); resolve(ok); };
+    const done = (ok) => () => {
+      panel.oncancel = null;
+      if (panel.open) panel.close();
+      panel.replaceChildren();
+      resolve(ok);
+    };
+    // Escape declines (the dialog's cancel), never approves.
+    panel.oncancel = (e) => { e.preventDefault(); done(false)(); };
     fill(panel,
-      h('h3', { id: 'review-title', text: title }),
+      h('h3', { id: 'review-title', tabindex: '-1', text: title }),
       h('p', { class: 'lead', text: 'The page checked this body itself: everything in the table is read from the body and the chain.' }),
       h('table', {}, lines.map(([k, v]) => h('tr', { class: / in all$/.test(k) || k === 'fee' ? 'highlight' : null },
         h('th', { text: k }), h('td', {}, h('code', { text: v }))))),
@@ -989,8 +996,11 @@ function approval({ title, lines, states, predicted, who }) {
       h('div', { class: 'actions' },
         h('button', { id: 'decline', class: 'ghost', text: 'Decline', onclick: done(false) }),
         h('button', { id: 'approve', class: 'primary', text: `Approve and sign as ${who}`, onclick: done(true) })));
-    panel.hidden = false;
-    $('approve').focus();
+    panel.showModal();
+    // The review opens at its top with the focus on its title: nothing is approved by a key press before the body has
+    // been shown (Fable #195 P1); Approve is a deliberate move.
+    panel.scrollTop = 0;
+    $('review-title').focus({ preventScroll: true });
   });
 }
 

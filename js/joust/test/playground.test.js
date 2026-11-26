@@ -629,7 +629,8 @@ for (const kind of ['java', 'jsc']) {
       await page.waitForSelector('#approve');
       assert.match(await page.locator('#review-before').innerText(), /"count": "7"/);
       assert.match(await page.locator('#review-after').innerText(), /"count": "8"/);
-      assert.doesNotMatch(await page.locator('#review table').innerText(), /999/);
+      // The prediction's 999 as a number of its own, never inside a hex value (a hash may hold "999").
+      assert.doesNotMatch(await page.locator('#review table').innerText(), /(?<![0-9a-f])999(?![0-9a-f])/);
       assert.equal(await page.locator('#review details.predicted').getAttribute('open'), null, 'the prediction is folded');
       await page.click('#approve');
       await page.waitForFunction((k) => document.querySelectorAll('#history li.ok').length > k, p);
