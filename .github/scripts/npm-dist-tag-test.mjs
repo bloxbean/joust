@@ -333,8 +333,24 @@ describe('the registry', () => {
     '/shasumonly': { name: 'shasumonly', 'dist-tags': { latest: '0.1.0' },
       versions: { '0.1.0': { version: '0.1.0', dist: { shasum: 'e7adf1882b2f846ea7eb78ce2afc4874a78749e8' } } } },
   };
+  const reads = [];
+  const fast = { retryDelayMs: 10 };
   before(async () => {
     server = createServer((req, res) => {
+      reads.push(req.url);
+      const [path] = req.url.split('?');
+      req.url = path;
+      if (req.url === '/silent') return; // never answers
+      // A 404 the first time it is asked, then the document (a CDN fault that clears).
+      if (req.url === '/flaky' && reads.filter((r) => r.startsWith('/flaky?')).length === 1) {
+        res.writeHead(404).end('{}');
+        return;
+      }
+      if (req.url === '/flaky') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+          .end(JSON.stringify(doc(['0.1.0'], { latest: '0.1.0' }, 'flaky')));
+        return;
+      }
       if (req.url === '/down') { res.writeHead(500).end(); return; }
       if (req.url === '/partial') {
         res.writeHead(206, { 'content-type': 'application/json' }).end(JSON.stringify(doc(['0.1.0'], { latest: '0.1.0' }, 'partial')));
@@ -347,7 +363,7 @@ describe('the registry', () => {
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     registry = `http://127.0.0.1:${server.address().port}`;
   });
-  after(() => server.close());
+  after(() => { server.closeAllConnections(); server.close(); });
 
   test('reads each package\'s own document (a scoped name escaped)', async () => {
     assert.deepEqual(await packageTag(registry, '@julclang/joust', '0.1.0-pre3'), { tag: 'latest', reason: null });
@@ -374,8 +390,30 @@ describe('the registry', () => {
     }
   });
 
-  test('a package the registry does not know (404) has no tags yet', async () => {
-    assert.deepEqual(await packageTag(registry, '@julclang/new', '0.1.0-pre3'), { tag: 'latest', reason: null });
+  test('a 404 is asked three times and then fails: only --new-package reads it as "not published yet" (#140 F1)', async () => {
+    const before404 = reads.length;
+    await assert.rejects(packageTag(registry, '@julclang/new', '0.1.0-pre3', null, fast),
+      /GET .*@julclang%2fnew: HTTP 404, 3 times\. A published package's 404 is a registry fault.*--new-package/);
+    assert.equal(reads.slice(before404).filter((r) => r.startsWith('/@julclang%2fnew?')).length, 3);
+    // The release's own case: create-joust has 0.1.0 on latest; a 404 must never send 0.2.0-pre1 to latest.
+    assert.deepEqual(await packageTag(registry, 'create-joust', '0.2.0-pre1', null, fast), { tag: 'preview', reason: null });
+    await assert.rejects(packageTag(registry, 'gone', '0.2.0-pre1', null, fast), /HTTP 404, 3 times/);
+    assert.deepEqual(await packageTag(registry, '@julclang/new', '0.1.0-pre3', null, { newPackage: true }),
+      { tag: 'latest', reason: null });
+    // A 404 that clears on the next read is the document.
+    assert.deepEqual(await packageTag(registry, 'flaky', '0.2.0-pre1', null, fast), { tag: 'preview', reason: null });
+  });
+
+  test('each read bypasses the CDN cache with a fresh query string, and gives up after the timeout (#140 F2, F3)', async () => {
+    const start = reads.length;
+    await packageTag(registry, 'create-joust', '0.2.0-pre1');
+    await packageTag(registry, 'create-joust', '0.2.0-pre1');
+    const mine = reads.slice(start);
+    assert.equal(mine.length, 2);
+    for (const r of mine) assert.match(r, /^\/create-joust\?joust-read=\d+-[0-9a-z]+$/);
+    assert.notEqual(mine[0], mine[1]);
+    await assert.rejects(packageTag(registry, 'silent', '0.1.0', null, { timeoutMs: 200 }),
+      /GET .*\/silent: no answer within 0\.2 s/);
   });
 
   test('an error or a malformed answer fails closed; only a 404 is "not published"', async () => {
@@ -414,10 +452,17 @@ describe('the registry', () => {
     assert.equal(down.code, 1);
     assert.equal(down.out, '');
     assert.match(down.err, /::error::down@0\.1\.0: GET .*HTTP 500/);
-    assert.equal((await run(['x', '0.1.0-SNAPSHOT', '--registry', registry])).code, 1);
+    const snapshot = await run(['create-joust', '0.1.0-SNAPSHOT', '--registry', registry]);
+    assert.equal(snapshot.code, 1);
+    assert.match(snapshot.err, /is a snapshot/);
     assert.equal((await run(['x'])).code, 2);
     assert.equal((await run(['x', '0.1.0', '--registry'])).code, 2);
     assert.equal((await run(['x', '0.1.0', '--registry', registry, '--integrity'])).code, 2);
+    const missing = await run(['@julclang/new', '0.1.0-pre3', '--registry', registry]);
+    assert.deepEqual([missing.code, missing.out], [1, '']);
+    assert.match(missing.err, /::error::@julclang\/new@0\.1\.0-pre3: GET .*HTTP 404, 3 times/);
+    assert.deepEqual(await run(['@julclang/new', '0.1.0-pre3', '--new-package', '--registry', registry]),
+      { code: 0, out: 'latest\n', err: '' });
     const skip = await run(['create-joust', '0.1.0', '--integrity', sri('0.1.0'), '--registry', registry]);
     assert.deepEqual([skip.code, skip.out], [0, 'skip\n']);
     assert.match(skip.err, /::notice::create-joust@0\.1\.0 is already published with this tarball's integrity: skipped/);

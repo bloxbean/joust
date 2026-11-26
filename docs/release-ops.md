@@ -305,11 +305,19 @@ same way (`0.1.0-pre23` published after `0.1.0` goes to `release-0.1`, not `prev
 summary lists the tag chosen for each package (under "Dist-tags (dry run; nothing published)" when `npm_publish` is
 false) and, after a publication, the dist-tags the registry then reports.
 
-The registry's answer is checked before it is used: exactly HTTP 200 (a 404 means "not published yet"; any other status
-stops the job), a document for that package with at least one version and a `latest` tag, every version and tag holder a
+The registry's answer is checked before it is used: exactly HTTP 200 (any other status stops the job), a document for that package with at least one version and a `latest` tag, every version and tag holder a
 version string within npm's limits (at most 256 characters, every number a safe integer), every holder among the
 versions. Anything else stops the job. The job installs one exact npm (11.21.1, checked by SHA-256; trusted publishing
 needs 11.5.1 or later), and reads `npm pack --json` in both npm 11's and npm 12's shapes.
+
+**A 404 stops the job.** Every JOUST package is already on npm, so a 404 is a registry or CDN fault: read as "not
+published yet", it would turn every guard off and could move `latest` backwards (a later `0.2.0-pre1` onto `latest` over
+`0.1.0`). The script asks three times, 2 s apart, then fails; re-run the release's failed jobs. The workflow never meets
+a new package: npm needs a package to exist before trusted publishing can be set up for it, so its first version (the
+placeholder) is published by hand. `--new-package`, which reads a 404 as "no tags yet", is only for such a hand run; the
+workflow never passes it. Each read adds a fresh query string, which npm's CDN does not serve from its cache (it keeps a
+document for minutes), so a release run right after another reads the tags that one set; a read that takes more than
+30 s fails.
 
 **Ordering.** A prerelease identifier with letters is compared as text: `0.1.0-pre10` is **lower** than `0.1.0-pre9`,
 and `0.1.0-pre1-rc10` lower than `0.1.0-pre1-rc9`, so a tenth `-preN` of a version would not take `latest` (it goes to

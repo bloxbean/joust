@@ -13,10 +13,15 @@
 // None of these is a valid semver range, which npm refuses as a tag. Every case is a recovery of version N after N+1, a maintenance release, or one package of N+1 published
 // before the others; the workflow publishes one version at a time (the npm job's concurrency group).
 //
-//   node .github/scripts/npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>]
+//   node .github/scripts/npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>] [--new-package]
 //       Prints the tag on stdout, and on stderr why it is not the rule's tag. The registry is npm's configured one
 //       (`npm config get registry`: setup-node's registry-url in the workflow) unless --registry names one. Fails
-//       closed: an unreadable or malformed registry answer is an error, never "not published yet"; only a 404 is.
+//       closed: an unreadable or malformed registry answer is an error, never "not published yet". So is a 404, asked
+//       three times, 2 s apart: every JOUST package is already on npm, so a 404 is a registry or CDN fault, and reading
+//       it as "no tags yet" would turn every guard off (as JuLC's ADR-077, which fails on a 404 after three tries).
+//       Only --new-package, given by hand for a package's first publication, reads a 404 as "not published yet".
+//       Each read bypasses the registry's CDN cache (a query string; npm's CDN keeps a document for minutes), so a
+//       release run right after another reads the tags that one set, and gives up after 30 s.
 //       When the registry already has <package>@<version> (a release resumed after a partial publication), prints
 //       `skip` if its dist.integrity is --integrity (the local tarball's), and fails otherwise: npm never replaces a
 //       published version, and a skipped package keeps the tag it was published with.
@@ -160,17 +165,37 @@ export function checkDocument(document, name) {
   return document;
 }
 
-/** The registry's document for a package (checked), or null when the registry does not know it (404 only). */
-export async function packument(registry, name) {
+/** How often a 404 is asked again before it fails, how long apart, and how long one read may take. */
+export const LOOKUP = { attempts: 3, retryDelayMs: 2000, timeoutMs: 30_000 };
+
+/**
+ * The registry's document for a package (checked). A 404 is asked `attempts` times and then fails, unless
+ * `newPackage` (a package's first publication): then it is null, "not published yet".
+ */
+export async function packument(registry, name, { newPackage = false, ...options } = {}) {
+  const { attempts, retryDelayMs, timeoutMs } = { ...LOOKUP, ...options };
   const url = registry.replace(/\/*$/, '/') + name.replace('/', '%2f');
   let response;
-  try {
-    response = await fetch(url, { headers: { accept: 'application/json' }, cache: 'no-store' });
-  } catch (e) {
-    fail(`GET ${url}: ${e.cause?.message ?? e.message}`);
+  for (let attempt = 1; ; attempt++) {
+    // A fresh query string each read: npm's CDN serves a cached document (for minutes) to a plain GET.
+    const fresh = `${url}?joust-read=${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      response = await fetch(fresh, {
+        headers: { accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      const why = e.name === 'TimeoutError' ? `no answer within ${timeoutMs / 1000} s` : e.cause?.message ?? e.message;
+      fail(`GET ${url}: ${why}`);
+    }
+    if (response.status !== 404) break;
+    if (newPackage) return null;
+    if (attempt >= attempts) {
+      fail(`GET ${url}: HTTP 404, ${attempts} times. A published package's 404 is a registry fault, never "not `
+        + 'published yet": re-run the job. Only a package\'s first publication passes --new-package');
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
-  if (response.status === 404) return null;
-  if (response.status !== 200) fail(`GET ${url}: HTTP ${response.status} (only 200, or 404 for an unpublished package)`);
+  if (response.status !== 200) fail(`GET ${url}: HTTP ${response.status} (only 200)`);
   let document;
   try {
     document = await response.json();
@@ -207,8 +232,8 @@ export function alreadyPublished(document, name, version, integrity) {
 }
 
 /** The tag for `name@version` from the registry as it is now, or `skip` when it is already published (integrity). */
-export async function packageTag(registry, name, version, integrity = null) {
-  const document = await packument(registry, name);
+export async function packageTag(registry, name, version, integrity = null, options = {}) {
+  const document = await packument(registry, name, options);
   if (alreadyPublished(document, name, version, integrity) === 'skip') {
     return { tag: 'skip', reason: `${name}@${version} is already published with this tarball's integrity` };
   }
@@ -277,14 +302,17 @@ async function main(argv) {
   };
   let registry = option('--registry');
   const integrity = option('--integrity');
+  const newPackage = args.includes('--new-package');
+  if (newPackage) args.splice(args.indexOf('--new-package'), 1);
   if (args.length !== 2 || registry === null || integrity === null) {
-    console.error('::error::usage: node npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>]');
+    console.error('::error::usage: node npm-dist-tag.mjs <package> <version> [--integrity <sri>] [--registry <url>] '
+      + '[--new-package]');
     return 2;
   }
   const [name, version] = args;
   try {
     registry ??= execFileSync('npm', ['config', 'get', 'registry'], { encoding: 'utf8' }).trim();
-    const { tag, reason } = await packageTag(registry, name, version, integrity);
+    const { tag, reason } = await packageTag(registry, name, version, integrity, { newPackage });
     if (tag === 'skip') console.error(`::notice::${reason}: skipped`);
     else if (reason) console.error(`::notice::${reason}, so ${name}@${version} goes to ${tag}`);
     console.log(tag);
