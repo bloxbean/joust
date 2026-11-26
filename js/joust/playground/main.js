@@ -105,7 +105,8 @@ function copyable(value, { head, tail, label = 'Copy' } = {}) {
     } });
   return h('span', { class: 'copy' }, h('code', { title: value, text: short(value, head, tail) }), btn);
 }
-const chip = (name, ...value) => h('span', { class: 'chip' }, h('b', { text: name }), ...value);
+/** A labelled value in the status strip; its text reads "name value" (the tests and screen readers read it so). */
+const chip = (name, ...value) => h('span', { class: 'chip' }, h('b', { text: name }), ' ', ...value);
 
 // ---- the theme: the system's, unless the toggle chose (a per-browser convenience; nothing depends on it)
 (() => {
