@@ -22,7 +22,7 @@ you see.
 
 | You want to | Contract in | App in | You need | Status |
 |---|---|---|---|---|
-| Build a Cardano app on the JVM | Java | Java, on cardano-client-lib | JDK 25 (Gradle comes with the project) | Supported |
+| Build a Cardano app on the JVM | Java | Java, on cardano-client-lib | JDK 25 (Gradle comes with the project); Node.js for DevKit and the playground | Supported |
 | Try JOUST's compact contract syntax | [`.jsc`](/languages/jsc/) | Java | JDK 25 | Language preview |
 | Build a Node script or a browser dApp | `.jsc` or Java | JavaScript or TypeScript | Node 22 or newer (no JDK) | Experimental |
 
@@ -41,31 +41,35 @@ You can change your mind later: a contract compiles to the same validator and th
    brew install bloxbean/tap/joust
    ```
 
-   For Apple silicon Macs and Linux (x86_64, arm64). There is no native `joust` for Intel Macs: use the npm path there.
+   For Apple silicon Macs and Linux (x86_64, arm64). There is no native `joust` for Intel Macs or Windows. There, a
+   Java project needs its build written by hand ([Gradle builds](/apps/gradle-builds/#the-build-files-by-hand)), and a
+   JavaScript project uses the npm path.
 
    </TabItem>
    <TabItem label="Release archive">
 
-   Download `joust-<version>-<platform>.zip` for your platform (`<platform>` is `macos-aarch64`, `linux-x86_64` or
-   `linux-arm64`) from the newest release on the [releases page](https://github.com/bloxbean/joust/releases). Check it,
-   then unpack it and put `joust` on your `PATH`:
+   Download `joust-<version>-<platform>.zip` and `joust-<version>-SHA256SUMS.txt` for your platform (`<platform>` is
+   `macos-aarch64`, `linux-x86_64` or `linux-arm64`) from the newest release on the
+   [releases page](https://github.com/bloxbean/joust/releases). Check it, unpack it and put `joust` on your `PATH`:
 
    ```sh
    shasum -a 256 -c joust-<version>-SHA256SUMS.txt --ignore-missing
-   gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust
+   gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust   # optional; needs the GitHub CLI
+   unzip joust-<version>-<platform>.zip
+   sudo mv joust /usr/local/bin/              # or any directory on your PATH
    ```
 
    On macOS, also clear the quarantine flag, since the binary is not notarised: `xattr -d com.apple.quarantine joust`.
 
    </TabItem>
-   <TabItem label="npm only">
+   <TabItem label="npm only (experimental)">
 
    On the npm path you do not need the native `joust`: `npm create joust@latest` creates a project, and the project's
    own `@julclang/joust` gives you `npx joust` and the `npm run` scripts. See
    [Quick start: JavaScript & TypeScript](/start/quick-start-npm/).
 
-   Do not also install `@julclang/joust` globally next to the native `joust`: with Homebrew's Node both use one path.
-   Keep the native one global and `@julclang/joust` per project.
+   Do not also install `@julclang/joust` globally next to the native `joust`: both install a command named `joust`, and
+   the second would replace the first. Keep the native one global and `@julclang/joust` per project.
 
    </TabItem>
    </Tabs>
@@ -78,7 +82,8 @@ You can change your mind later: a contract compiles to the same validator and th
    joust version          # joust <version> (native)
    ```
 
-   On the npm path, run `npx joust version` inside a project instead.
+   On the npm path you check the version later, inside your project after `npm install`, with `npx joust version`
+   ([Quick start: JavaScript](/start/quick-start-npm/)). Outside a project, `npx joust` would fetch an unrelated package.
 
    Compare `<version>` with the newest release on the [releases page](https://github.com/bloxbean/joust/releases).
    `joust new` writes the version of the `joust` that runs it into the project, so upgrade before you create a
@@ -88,15 +93,26 @@ You can change your mind later: a contract compiles to the same validator and th
 
    - **Gradle (Java or `.jsc`):** JDK 25. You do not need Gradle: `joust new` writes the Gradle wrapper (`./gradlew`)
      into the project.
-   - **npm (JavaScript):** Node 22 or newer. The playground (`joust playground`) needs Node 22 too, on
+   - **npm (JavaScript, experimental):** Node 22 or newer. The playground (`joust playground`) needs Node 22 too, on
      both paths.
 
-4. **Start a local Cardano network.** The quick starts run on [Yaci DevKit](https://github.com/bloxbean/yaci-devkit),
-   started with its indexer, Yaci Store:
+4. **Install and start a local Cardano network.** The quick starts run on
+   [Yaci DevKit](https://github.com/bloxbean/yaci-devkit), a private Cardano network on your machine: its faucet hands
+   out test ADA, so nothing costs real money. Install it once (it needs Node.js; DevKit's README also has Docker and zip
+   distributions, which start differently):
+
+   ```sh
+   npm install -g @bloxbean/yaci-devkit
+   ```
+
+   Start it with its indexer, Yaci Store, in a terminal of its own, and leave it running (the first start downloads
+   what it needs, so it takes longer):
 
    ```sh
    yaci-devkit up --enable-yaci-store
    ```
+
+   You only need DevKit for the steps that run on a chain: building, the tests and the playground work without it.
 
    Yaci Store then answers on `http://localhost:8080` (a Blockfrost-compatible API), the DevKit admin API on
    `http://localhost:10000` (slot clock, faucet), and the Yaci Viewer explorer on `http://localhost:5173`. See

@@ -71,6 +71,7 @@ h1, h2, h3, h4 { margin: 0; letter-spacing: -0.02em; line-height: 1.15; }
 .prompt { color: var(--amber-bright); }
 .terminal.lines { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; overflow-x: auto; }
 .terminal.lines > span { white-space: nowrap; }
+.muted-cmt { color: #8b8fb0; }
 .caret { display: inline-block; width: 8px; height: 1.1em; background: #7b78ff; margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 

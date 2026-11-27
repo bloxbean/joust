@@ -6,7 +6,7 @@ description: What the org.julclang.joust Gradle plugin adds, the build files jou
 import { Aside, FileTree, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
 A JOUST project on the JVM is an ordinary Gradle build. `joust new` writes one that applies the Gradle plugin
-`org.julclang.joust` ([ADR-0017](/project/architecture-decisions/)), and the plugin does the JOUST setup. This page
+`org.julclang.joust`, and the plugin does the JOUST setup. This page
 explains what the plugin adds, and how to write the same build by hand when you need to: an existing build, or a
 JOUST built from a checkout. For a first project, start with [Quick start: Java & Gradle](/start/quick-start-java/).
 
@@ -37,7 +37,7 @@ block replaces Gradle's default plugin repository: to use other plugins (foojay,
 ```groovy title="build.gradle"
 plugins {
     id 'application'
-    // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+    // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings.
     // Upgrading JOUST is this version.
     id 'org.julclang.joust' version '<version>'
 }
@@ -73,13 +73,10 @@ The plugin does what the hand-written `build.gradle` [below](#the-build-files-by
 | `julc-state-testkit`, `junit-platform-launcher` | the tests |
 | UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
 | `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
-| `joustHostSpec`, the protocol 1 launch manifest for an editor's dev host | `build/joust/host-spec.json` |
+| `joustHostSpec`: what `joust playground` and editor plugins run to start [the dev host](/apps/dev-host/) | `build/joust/host-spec.json` |
 
-For an editor launch from a trusted project, run `./gradlew joustHostSpec`. It builds the main runtime class path
-and records its entries in lookup order, with the toolchain's Java executable and SHA-256 digests. The isolated
-`joustHost` configuration supplies the plugin's serving adapter and stdio host. An HTTP application reuses its
-matching adapter. A version mismatch or a jar with a manifest `Class-Path` fails the task. The editor verifies a
-private, read-only copy of those entries and starts `DevHost --stdio` from that snapshot.
+You rarely run `joustHostSpec` yourself: `joust playground` runs it. [The dev host](/apps/dev-host/) explains what it
+records and how a tool starts the host from it.
 
 In a Gradle build, `joust build`, `joust test` and `joust run` run `./gradlew build`, `test` and `run` (a
 subproject's directory selects the subproject); see [the native `joust`](/reference/joust-cli/#the-native-joust).
@@ -227,7 +224,7 @@ shows each of them.
 Modules inside the JOUST repository use the same bundle as a **directory**:
 `annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')`, as in
 [`examples/counter/build.gradle`](https://github.com/bloxbean/joust/blob/main/examples/counter/build.gradle). A jar
-that is rebuilt while a Gradle daemon is running can make JuLC's source scan silently find nothing (ADR-0001 F8). A
+that is rebuilt while a Gradle daemon is running can make JuLC's source scan silently find nothing. A
 published jar does not change, so this rarely matters outside the repository; if a build suddenly reports that JuLC
 cannot resolve `Ctx` or `Require`, run `./gradlew --stop` and build again.
 

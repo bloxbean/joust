@@ -65,6 +65,13 @@ export const SIDEBAR = [
     ],
   },
   {
+    label: 'Tools',
+    items: [
+      { label: 'The playground', slug: 'apps/playground', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'The dev host', slug: 'apps/dev-host', badge: { text: 'Experimental', variant: 'caution' } },
+    ],
+  },
+  {
     label: 'Building apps: JavaScript',
     items: [
       { label: 'JavaScript clients', slug: 'apps/javascript-clients', badge: { text: 'Experimental', variant: 'caution' } },

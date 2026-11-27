@@ -6,7 +6,10 @@ description: (Experimental) Create a JOUST app with npm only, build and deploy i
 import { Aside, Steps, FileTree, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="Experimental">
-The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+The npm path runs JOUST's compiler and runtime as WebAssembly (built with GraalVM Web Image, itself experimental). For
+you that means: commands and APIs may change between pre-releases, a page loads about 20 MB of WebAssembly, and it is
+for DevKit and testnets, not for holding value. Java with Gradle and cardano-client-lib is the supported, first-class
+path: see [Quick start: Java](/start/quick-start-java/).
 </Aside>
 
 This page takes you from an empty folder to a Cardano contract you can call from Node and from a browser page, with
@@ -33,6 +36,9 @@ You will:
   faucet) on `:10000`, and the Yaci Viewer explorer on `http://localhost:5173`.
 - **The JOUST npm packages** come from npmjs.org: `npm create joust@latest` installs what it needs. Their versions
   follow JOUST's [releases](https://github.com/bloxbean/joust/releases).
+- **Yaci DevKit**, installed once with `npm install -g @bloxbean/yaci-devkit` ([Install JOUST](/start/install/)).
+  Start it in a terminal of its own and leave it running. It is a private network on your machine: nothing costs
+  real money.
 - **Optionally, the native `joust`** (`brew install bloxbean/tap/joust`), if you also want to create Gradle projects
   from the same command. [Install JOUST](/start/install/) covers each tool.
 
@@ -109,13 +115,17 @@ You will:
    }
    ```
 
-   It is written in `.jsc`, a preview ([.jsc](/languages/jsc/)). Beside it, `create-joust` writes
+   It is written in `.jsc`, a language preview ([.jsc](/languages/jsc/)): a later JOUST may compile the same file to a
+   different script hash, so use it on DevKit and testnets, not to hold value. Beside it, `create-joust` writes
    `Counter.abi.json`, the contract's ABI manifest: how its state and its calls are encoded on chain. A build fails
    when the manifest is missing or differs from what the contract now compiles to, so an encoding change cannot slip
    through; `npx joust build --accept-abi` accepts a change you intend, to review and commit.
 
    `joust build` generates the same description and the same JavaScript client from `Counter.jsc` as from
    `Counter.java`, so nothing else in the project depends on the language.
+
+   In this project, `joust <command>` means `npx joust <command>` or the matching `npm run` script; a native `joust`
+   hands over to the same package. Run `npx joust` only inside the project, after `npm install`.
 
 2. **Check the JOUST version.** The three JOUST packages in `package.json` share one version:
 
@@ -148,6 +158,8 @@ You will:
 
    The size and hash depend on the contract, its language and the toolchain's version. The four transitions are the contract's
    four methods (`init`, `increment`, `reset`, `close`), compiled so the runtime engine can run them off chain.
+
+   No DevKit yet? `npm test` and the [playground](#try-it-in-the-playground) run offline, with no chain.
 
 4. **Deploy it on DevKit.**
 
@@ -196,7 +208,8 @@ You will:
    state       null
    ```
 
-   `npm start` runs steps 3 to 5 in one go. `index.js` is the whole app:
+   The refusal names where it came from: line 22 of the template's `Counter.jsc`, which has comments the copy above
+   leaves out. `npm start` runs steps 3 to 5 in one go. `index.js` is the whole app:
 
    ```js title="index.js (abridged)"
    import { joustRuntime, devWallet, devkitTopUp } from '@julclang/joust-runtime';
@@ -235,6 +248,32 @@ You will:
    makes them on DevKit.
 
 </Steps>
+
+## Try it in the playground
+
+The playground is a page in your browser where you call your contract without writing any code: pick who signs, fill
+in a form, review the transaction, approve. It needs Node.js 22 or newer, and runs offline (no DevKit) by default.
+
+```sh
+npx joust playground
+```
+
+It builds first, as `joust build` does, then opens the page.
+
+<Steps>
+
+1. Click `Counter` under **Contracts**. Its operations appear as cards: `init`, `increment`, `reset` and `close`.
+2. Click **Review…** on `init`. The first call publishes the contract's script, so you approve a **Review publication**
+   dialog first, then the call's own. Click **Approve and sign as Alice** in each. The new counter appears under
+   **Instances**.
+3. Type `5` into `by` on the `increment` card, click **Review…** and approve. The state shows the count 5.
+4. Choose Bob under **Identities** and click **Review…** on `reset`. Bob is not the owner, so it is refused before
+   anything is signed.
+
+</Steps>
+
+**Ctrl-C** in the terminal stops it. `--mode devkit` runs the same page against a running Yaci DevKit.
+[The playground](/apps/playground/) explains everything on the page.
 
 ## The project
 
@@ -305,7 +344,8 @@ npm install
 
 </FileTree>
 
-The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through every file. Its `package.json` has these scripts:
+The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through every file (it uses the Java version of the
+contract, which `joust build` compiles in Node, with no JDK; the `.jsc` one works the same). Its `package.json` has these scripts:
 
 | Script | Runs | What it does |
 |---|---|---|

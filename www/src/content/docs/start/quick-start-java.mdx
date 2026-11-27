@@ -20,12 +20,15 @@ entry on the [releases page](https://github.com/bloxbean/joust/releases) whose t
 
 ## Before you start
 
-You need three things; [Install JOUST](/start/install/) covers each one.
+[Install JOUST](/start/install/) covers each of these.
 
 - **`joust`**: `brew install bloxbean/tap/joust`, or the archive for your platform from the
   [releases page](https://github.com/bloxbean/joust/releases). Check it with `joust version`.
 - **JDK 25.** You do not need Gradle: the project comes with the Gradle wrapper.
-- **Yaci DevKit** for the last step: `yaci-devkit up --enable-yaci-store`.
+- **Node.js 22 or newer**, for Yaci DevKit's npm package and for the playground.
+- **Yaci DevKit** for the last step: `npm install -g @bloxbean/yaci-devkit` once, then
+  `yaci-devkit up --enable-yaci-store` in a terminal of its own. It is a private Cardano network on your machine: its
+  faucet hands out test ADA, so nothing costs real money.
 
 ## Create, build and run
 
@@ -68,7 +71,7 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    ```groovy title="build.gradle"
    plugins {
        id 'application'
-       // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+       // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings.
        // Upgrading JOUST is this version.
        id 'org.julclang.joust' version '<version>'
    }
@@ -105,10 +108,13 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    ./gradlew test                        # or: joust test
    ```
 
+   `build` already ran them; this runs only the tests.
+
    `CounterTest` runs the contract's methods as plain Java, then evaluates the compiled validator against
    transactions shaped like the runtime's, and runs the attack suite on each accepted one.
 
-5. **Run it on DevKit.** Start DevKit if it is not running (`yaci-devkit up --enable-yaci-store`), then:
+5. **Run it on DevKit.** Start DevKit in another terminal if it is not running
+   (`yaci-devkit up --enable-yaci-store`, and leave it running), then:
 
    ```sh
    ./gradlew run                         # or: joust run
@@ -131,7 +137,8 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    Your hashes will differ. The first run on a fresh DevKit also logs `publish the Counter reference script: submitted
    ...` and `published the Counter reference script in ...`: the first deploy of a contract on a network publishes its
    script once, for every later transaction to read.
-   Open the address in Yaci Viewer (`http://localhost:5173`) to see the state UTxOs and their datums.
+   Paste a transaction hash from the output into Yaci Viewer (`http://localhost:5173`) to see the state UTxO and its
+   datum.
 
 </Steps>
 
@@ -430,23 +437,35 @@ final class Devnet {
 
 ## Try it in the playground
 
+<Aside type="caution" title="Experimental">
+The playground runs on JOUST's npm packages and their WebAssembly engine, even for a Gradle project.
+</Aside>
+
+The playground is a page in your browser where you call your contract without writing any code: pick who signs, fill
+in a form, review the transaction, approve. It needs Node.js 22 or newer, and runs offline (no DevKit) by default.
+
 ```sh
-joust playground                  # ./gradlew build joustHostSpec, then a browser page for every contract, offline
+joust playground
 ```
 
-`joust playground` ([ADR-0024](/project/architecture-decisions/)) opens a generated page for every contract of the
-project: test identities (Alice, Bob, Carol) whose keys stay in the page, a form for each call, the state and named
-views, an in-memory ledger that checks the node's phase-1 rules it models and runs the scripts with JuLC's VM, and the
-attack suite on every script transaction. Every transaction is checked by the page and shown for review before an
-identity signs it. It needs **Node.js 22+**: the native `joust` installs the `@julclang/joust` of its own version once
-into `~/.joust/playground/<version>` and runs the playground from there, never from the project. The build runs through
-your wrapper with its gates (`checkJscAbi`, the lock check); accept an intended change with `./gradlew acceptJscAbi`.
-The dev host runs a private, verified copy of the build: after a rebuild, start a new session in the page to use it.
-The playground refuses a build that other accounts could change: the project's directories up to its `settings.gradle`,
-that file and `gradlew` must be yours and not group- or world-writable. On a system whose umask is `002` (where
-`joust new` or `git clone` leaves them `775`/`664`), it names every such path and the one command that fixes them
-(`chmod go-w <paths>`); or list the build's directory in `JOUST_SAFE_DIRS` if you share it on purpose.
-Offline success is not a node's acceptance: `joust playground --mode devkit` runs the same page against a running Yaci DevKit.
+The first run installs the playground once into `~/.joust/playground/<version>` (with npm), then runs
+`./gradlew build joustHostSpec` and opens the page. If it refuses because other accounts could change your build, it
+prints the `chmod go-w` command that fixes it.
+
+<Steps>
+
+1. Click `Counter` under **Contracts**. Its operations appear as cards: `init`, `increment`, `reset` and `close`.
+2. Click **Review…** on `init`. The first call publishes the contract's script, so you approve a **Review publication**
+   dialog first, then the call's own. Click **Approve and sign as Alice** in each. The new counter appears under
+   **Instances**.
+3. Type `5` into `by` on the `increment` card, click **Review…** and approve. The state shows the count 5.
+4. Choose Bob under **Identities** and click **Review…** on `reset`. Bob is not the owner, so it is refused before
+   anything is signed.
+
+</Steps>
+
+**Ctrl-C** in the terminal stops it. `--mode devkit` runs the same page against a running Yaci DevKit.
+[The playground](/apps/playground/) explains everything on the page.
 
 ## Explore the examples
 

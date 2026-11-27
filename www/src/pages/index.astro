@@ -87,11 +87,10 @@ const ecosystem = [
             <a class="btn btn-ghost" href="/start/quick-start-java/">Quick start: Java</a>
             <a class="link-arrow" href="/start/why-joust/">Why JOUST &rarr;</a>
           </div>
-          <div class="terminal lines" aria-label="Create a JOUST project and run it">
+          <div class="terminal lines" aria-label="Create a Java project with JOUST and build it (JDK 25)">
             <span><span class="prompt">$</span> brew install bloxbean/tap/joust</span>
             <span><span class="prompt">$</span> joust new my-app &amp;&amp; cd my-app</span>
-            <span><span class="prompt">$</span> yaci-devkit up --enable-yaci-store</span>
-            <span><span class="prompt">$</span> ./gradlew run<span class="caret"></span></span>
+            <span><span class="prompt">$</span> ./gradlew build<span class="muted-cmt">   # JDK 25: validator, client, tests</span><span class="caret"></span></span>
           </div>
         </div>
         <div class="hero-code">
@@ -140,7 +139,7 @@ const ecosystem = [
     <section class="section alt">
       <div class="wrap">
         <h2>What JOUST generates</h2>
-        <p class="sub">From one annotated class, during your Gradle build: an on-chain validator compiled by JuLC, a typed Java client on cardano-client-lib, and a description for other languages.</p>
+        <p class="sub">From one annotated class, during your build (Gradle, or <code>joust build</code> with npm): an on-chain validator compiled by JuLC, a typed Java client on cardano-client-lib, and a description for other languages.</p>
         <figure class="diagram"><img src={overviewSvg.src} width={overviewSvg.width} height={overviewSvg.height} alt="What JOUST generates from one contract: the validator, the Java client and a description" loading="lazy" /></figure>
         <figure class="diagram"><img src={lifecycleSvg.src} width={lifecycleSvg.width} height={lifecycleSvg.height} alt="An instance's life on chain: create, actions, destroy, tied together by a thread token" loading="lazy" /></figure>
         <p class="center"><a class="link-arrow" href="/start/how-it-works/">How JOUST works &rarr;</a></p>
@@ -179,7 +178,7 @@ const ecosystem = [
           <a class="card path" href="/tutorials/vault/"><h3>Tutorials</h3><p>Vaults, escrows, tokens in MerkleMaps, banks, pools, a DEX, a multisig treasury and more.</p></a>
           <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
         </div>
-        <p class="note"><code>joust new</code> writes the JOUST version of the <code>joust</code> that runs it: check the <a href="https://github.com/bloxbean/joust/releases">releases page</a> for the newest release first (<a href="/start/install/">Install JOUST</a>). JOUST is experimental, a research and learning project: not for production. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+        <p class="note"><code>joust new</code> pins the project to the version of <code>joust</code> you run it with, so check the <a href="https://github.com/bloxbean/joust/releases">releases page</a> for the newest release first (<a href="/start/install/">Install JOUST</a>). JOUST is experimental, a research and learning project: not for production. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
       </div>
     </section>
 
