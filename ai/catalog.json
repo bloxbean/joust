@@ -2,7 +2,7 @@
   "name": "JOUST",
   "url": "https://joust.julc.dev",
   "repo": "https://github.com/bloxbean/joust",
-  "generatedAt": "2026-11-25T13:34:51.624Z",
+  "generatedAt": "2026-11-27T16:02:03.854Z",
   "annotations": [
     {
       "name": "@Action",
@@ -553,8 +553,14 @@
       "group": "Start here"
     },
     {
+      "title": "Install JOUST",
+      "description": "Install the joust command, pick your path (Java or .jsc with Gradle, or JavaScript with npm), set up Yaci DevKit, and check which JOUST version you have.",
+      "url": "https://joust.julc.dev/start/install/",
+      "group": "Start here"
+    },
+    {
       "title": "Quick start: Java & Gradle",
-      "description": "Run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.",
+      "description": "Create a JOUST project with joust new, check its JOUST version, then build, test and run its Counter contract (Java or .jsc) on Yaci DevKit.",
       "url": "https://joust.julc.dev/start/quick-start-java/",
       "group": "Start here"
     },
@@ -634,13 +640,13 @@
       "title": "A counter dApp in the browser",
       "description": "Build the template's Counter dApp end to end, from the Java contract to a page that prepares, checks and signs its own transactions.",
       "url": "https://joust.julc.dev/tutorials/counter-dapp/",
-      "group": "Tutorials: JavaScript"
+      "group": "Tutorials: JavaScript (experimental)"
     },
     {
       "title": "Deploy to preview",
       "description": "Take the Counter dApp from Yaci DevKit to Cardano's preview testnet, run it with Eternl or Lace, and ship the page as static files.",
       "url": "https://joust.julc.dev/tutorials/deploy-preview/",
-      "group": "Tutorials: JavaScript"
+      "group": "Tutorials: JavaScript (experimental)"
     },
     {
       "title": "State and lifecycle",
@@ -751,52 +757,70 @@
       "group": "Writing contracts"
     },
     {
+      "title": "Gradle builds",
+      "description": "What the org.julclang.joust Gradle plugin adds, the build files joust new writes, how to set a build up by hand, and how to build against a JOUST checkout.",
+      "url": "https://joust.julc.dev/apps/gradle-builds/",
+      "group": "Building apps: Java"
+    },
+    {
       "title": "Java off-chain runtime",
       "description": "Use generated clients from Java - configure StateRuntime, deploy and call instances, read state and views, compose several calls in one transaction, and prepare transactions for browser wallets.",
       "url": "https://joust.julc.dev/apps/java-runtime/",
       "group": "Building apps: Java"
     },
     {
+      "title": "The playground",
+      "description": "Try every contract of a project in a browser with joust playground - offline or on Yaci DevKit - and read what each run does and does not prove.",
+      "url": "https://joust.julc.dev/apps/playground/",
+      "group": "Tools"
+    },
+    {
+      "title": "The dev host",
+      "description": "What JOUST's dev host is, when you meet it, and how a tool launches and drives it over stdio with protocol 1.",
+      "url": "https://joust.julc.dev/apps/dev-host/",
+      "group": "Tools"
+    },
+    {
       "title": "JavaScript clients",
       "description": "Call JOUST contracts from JavaScript - generated clients, JoustContract, joustRuntime in Node, prepare services, the page verifier and JSON conventions.",
       "url": "https://joust.julc.dev/apps/javascript-clients/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "Wallets",
       "description": "Connect CIP-30 browser wallets such as Eternl and Lace, review and sign JOUST transactions, use the DevKit dev wallet, and know what a wallet risks.",
       "url": "https://joust.julc.dev/apps/wallets/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "Pages: worker, Vite, static builds",
       "description": "Run JOUST's runtime engine in a page's Web Worker, configure Vite with @julclang/joust/vite, and ship a page as static files with SRI-checked engine files.",
       "url": "https://joust.julc.dev/apps/pages/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "The joust CLI and projects",
       "description": "How a JOUST npm project is laid out, what joust build, deploy, dev and serve do, and every file they write.",
       "url": "https://joust.julc.dev/apps/cli-and-projects/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "Networks and chain providers",
       "description": "Configure networks for JOUST's npm tooling, read the chain through Blockfrost, Yaci Store or Ogmios, and handle clocks, TTLs and project ids safely.",
       "url": "https://joust.julc.dev/apps/networks-and-providers/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "Keyed objects in JavaScript",
       "description": "Call keyed objects from Node and pages - JoustKeyedList and JoustKeyedObject, keyed calls through the engine, what the page checks, and retries that survive a reload.",
       "url": "https://joust.julc.dev/apps/keyed-objects-js/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "MerkleMap mirrors",
       "description": "How JOUST keeps MerkleMaps off chain - mirrors over Aiken's MPF that answer the engine's proofs, persist in LevelDB, IndexedDB or RocksDB, and rebuild from chain history.",
       "url": "https://joust.julc.dev/apps/map-mirrors/",
-      "group": "Building apps: JavaScript"
+      "group": "Building apps: JavaScript (experimental)"
     },
     {
       "title": "Java",
@@ -856,25 +880,25 @@
       "title": "@julclang/state-client",
       "description": "API reference of @julclang/state-client - clients, services, chain providers, wallets, verifiers, data codecs, ledger helpers and joust-gen.",
       "url": "https://joust.julc.dev/reference/state-client/",
-      "group": "Reference: JavaScript"
+      "group": "Reference: JavaScript (experimental)"
     },
     {
       "title": "@julclang/joust-runtime",
       "description": "API reference of @julclang/joust-runtime - joustRuntime and its options, engineService, the page worker and engineWorker, mirrors, snapshots and DevKit helpers.",
       "url": "https://joust.julc.dev/reference/joust-runtime/",
-      "group": "Reference: JavaScript"
+      "group": "Reference: JavaScript (experimental)"
     },
     {
       "title": "@julclang/joust (CLI, Vite)",
       "description": "Reference of @julclang/joust - every joust command and flag, environment variables, the dev server's routes, the Vite plugin and virtual:joust/network, and create-joust.",
       "url": "https://joust.julc.dev/reference/joust-cli/",
-      "group": "Reference: JavaScript"
+      "group": "Reference: JavaScript (experimental)"
     },
     {
       "title": "joust.config.json",
       "description": "Every key of a JOUST project's joust.config.json, with its default, which command reads it, and how networks merge over the built-in ones.",
       "url": "https://joust.julc.dev/reference/config/",
-      "group": "Reference: JavaScript"
+      "group": "Reference: JavaScript (experimental)"
     },
     {
       "title": "Contract description",

@@ -139,8 +139,8 @@ to most realistic.
    your contract's job.
 
 > **Caution:** 
-JOUST is experimental and pre-release: its releases are in the BloxBean release repository and on npmjs.org, and
-nothing is on Maven Central. An agent that "remembers" a version or a registry is guessing: take the version from the newest release
+JOUST is experimental and pre-release: its releases are in the BloxBean release repository (recent ones on Maven
+Central too) and on npmjs.org. An agent that "remembers" a version or a registry is guessing: take the version from the newest release
 whose tag starts with `v` on the [releases page](https://github.com/bloxbean/joust/releases) (or
 `npm view @julclang/joust version`), and the setup from the
 [Java quick start](https://joust.julc.dev/start/quick-start-java/) or the [npm quick start](https://joust.julc.dev/start/quick-start-npm/).

@@ -1,0 +1,697 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-g5ptsecz"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>The playground | JOUST</title><link rel="canonical" href="https://joust.julc.dev/apps/playground/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.3.8"/><meta name="generator" content="Starlight v0.42.10"/><meta property="og:title" content="The playground"/><meta property="og:type" content="article"/><meta property="og:url" content="https://joust.julc.dev/apps/playground/"/><meta property="og:locale" content="en"/><meta property="og:description" content="Try every contract of a project in a browser with joust playground - offline or on Yaci DevKit - and read what each run does and does not prove."/><meta property="og:site_name" content="JOUST"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="Try every contract of a project in a browser with joust playground - offline or on Yaci DevKit - and read what each run does and does not prove."/><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"><link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt"><meta property="og:image" content="https://joust.julc.dev/joust-knight.png"><meta property="og:image:alt" content="JOUST — State Contract Simplified"><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.C9eyqPGL.css" media="print"><link rel="stylesheet" href="/_astro/common.CKVVw45s.css"><style>@layer starlight.components{svg:where(.astro-hkc32dio){color:var(--sl-icon-color);font-size:var(--sl-icon-size,1em);width:1em;height:1em;overflow:visible}}
+</style><script type="module" src="/_astro/page.cNngjUgL.js"></script><style>@layer starlight.components{.card-grid:where(.astro-7qmvx3iy){grid-template-columns:100%;gap:1rem;display:grid}.card-grid:where(.astro-7qmvx3iy)>*{margin-top:0!important}@media (width>=50rem){.card-grid:where(.astro-7qmvx3iy){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-7qmvx3iy){--stagger-height:5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-7qmvx3iy)>:nth-child(2n){transform:translateY(var(--stagger-height))}}}
+</style><style>@layer starlight.components{starlight-file-tree:where(.astro-a2hqddox){--x-space:1.5rem;--y-space:.125rem;--y-pad:0;border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-gray-6);font-size:var(--sl-text-xs);font-family:var(--__sl-font-mono);padding:1rem;display:block;overflow-x:auto}starlight-file-tree:where(.astro-a2hqddox) .directory>details{padding:0;background:0 0;border:0;padding-inline-start:var(--x-space)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary{padding:var(--y-pad) .625rem;color:var(--sl-color-white);border:0;max-width:100%;margin-inline-start:calc(-1 * var(--x-space));font-weight:400}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::marker,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary::-webkit-details-marker{color:var(--sl-color-gray-3)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover,starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .tree-icon{cursor:pointer;color:var(--sl-color-text-accent);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover~ul{border-color:var(--sl-color-gray-4)}starlight-file-tree:where(.astro-a2hqddox) .directory>details>summary:hover .highlight .tree-icon{color:var(--sl-color-text-invert);fill:currentColor}starlight-file-tree:where(.astro-a2hqddox) ul{border-inline-start:1px solid var(--sl-color-gray-5);margin-inline-start:.5rem;padding:0;padding-inline-start:.125rem;list-style:none}starlight-file-tree:where(.astro-a2hqddox)>ul{border:0;margin:0;padding:0}starlight-file-tree:where(.astro-a2hqddox) li{margin:var(--y-space) 0;padding:var(--y-pad) 0}starlight-file-tree:where(.astro-a2hqddox) .file{color:var(--sl-color-white);margin-inline-start:calc(var(--x-space) - .125rem)}starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:wrap;align-items:flex-start;max-width:calc(100% - 1rem);display:inline-flex}@media (width>=30em){starlight-file-tree:where(.astro-a2hqddox) .tree-entry{flex-wrap:nowrap}}starlight-file-tree:where(.astro-a2hqddox) .tree-entry>:first-child{flex-shrink:0}starlight-file-tree:where(.astro-a2hqddox) .empty{color:var(--sl-color-gray-3);padding-inline-start:.375rem}starlight-file-tree:where(.astro-a2hqddox) .comment{color:var(--sl-color-gray-3);min-width:12rem;max-width:24rem;padding-inline-start:1.625rem}starlight-file-tree:where(.astro-a2hqddox) .highlight{color:var(--sl-color-text-invert);background-color:var(--sl-color-text-accent);border-radius:.25rem;padding-inline-end:.5rem;display:inline-block}starlight-file-tree:where(.astro-a2hqddox) svg{fill:var(--sl-color-gray-3);vertical-align:middle;width:.875rem;height:.875rem;margin-inline:.25rem .375rem;display:inline;overflow:visible}starlight-file-tree:where(.astro-a2hqddox) .highlight svg.tree-icon{fill:currentColor}}
+</style><style>@layer starlight.components{.sl-link-card:where(.astro-zaaezwya){border:1px solid var(--sl-color-gray-5);box-shadow:var(--sl-shadow-sm);border-radius:.5rem;grid-template-columns:1fr auto;gap:.5rem;padding:1rem;display:grid;position:relative}a:where(.astro-zaaezwya){line-height:var(--sl-line-height-headings);text-decoration:none}a:where(.astro-zaaezwya):before{content:"";position:absolute;inset:0}.stack:where(.astro-zaaezwya){flex-direction:column;gap:.5rem}.title:where(.astro-zaaezwya){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-zaaezwya){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-zaaezwya){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-zaaezwya):hover{background:var(--sl-color-gray-7,var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-zaaezwya):hover .icon:where(.astro-zaaezwya){color:var(--sl-color-white)}}
+</style><style>@layer starlight.components{.sl-steps{--bullet-size:calc(var(--sl-line-height) * 1rem);--bullet-margin:.375rem;counter-reset:steps-counter var(--sl-steps-start,0);padding-inline-start:0;list-style:none}.sl-steps>li{counter-increment:steps-counter;padding-inline-start:calc(var(--bullet-size) + 1rem);min-height:calc(var(--bullet-size) + var(--bullet-margin));padding-bottom:1px;position:relative}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);top:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);box-shadow:inset 0 0 0 1px var(--sl-color-gray-5);border-radius:99rem;font-weight:600;position:absolute;inset-inline-start:0}.sl-steps>li:after{--guide-width:1px;content:"";top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);width:var(--guide-width);background-color:var(--sl-color-hairline-light);position:absolute;inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2)}}@layer starlight.content{.sl-steps>li>:first-child{--lh:calc(1em * var(--sl-line-height));--shift-y:calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh:calc(1em * var(--sl-line-height-headings))}@supports (--prop:1lh){.sl-steps>li>:first-child{--lh:1lh}}}
+</style><style>@layer starlight.components{starlight-tabs:where(.astro-scn3uvmv){display:block}.tablist-wrapper:where(.astro-scn3uvmv){overflow-x:auto}:where(.astro-scn3uvmv)[role=tablist]{border-bottom:2px solid var(--sl-color-gray-5);padding:0;list-style:none;display:flex}.tab:where(.astro-scn3uvmv){display:flex}.tab:where(.astro-scn3uvmv)>:where(.astro-scn3uvmv)[role=tab]{--sl-tab-color-border:var(--sl-color-gray-5);line-height:var(--sl-line-height-headings);box-shadow:0 2px 0 var(--sl-tab-color-border);color:var(--sl-color-gray-3);outline-offset:var(--sl-outline-offset-inside);overflow-wrap:initial;align-items:center;gap:.5rem;padding:.275rem 1.25rem;text-decoration:none;display:flex}.tab:where(.astro-scn3uvmv) :where(.astro-scn3uvmv)[role=tab][aria-selected=true]{--sl-tab-color-border:var(--sl-color-text-accent);color:var(--sl-color-white);font-weight:600}.tablist-wrapper:where(.astro-scn3uvmv)~[role=tabpanel]{margin-top:1rem}}
+</style><style>@layer starlight.components{.card:where(.astro-oag6qnet){--sl-card-border:var(--sl-color-purple);--sl-card-bg:var(--sl-color-purple-low);border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-black);flex-direction:column;gap:clamp(.5rem,.125rem + 1vw,1rem);padding:clamp(1rem,.125rem + 3vw,2.5rem)}.card:where(.astro-oag6qnet):nth-child(4n+1){--sl-card-border:var(--sl-color-orange);--sl-card-bg:var(--sl-color-orange-low)}.card:where(.astro-oag6qnet):nth-child(4n+3){--sl-card-border:var(--sl-color-green);--sl-card-bg:var(--sl-color-green-low)}.card:where(.astro-oag6qnet):nth-child(4n+4){--sl-card-border:var(--sl-color-red);--sl-card-bg:var(--sl-color-red-low)}.card:where(.astro-oag6qnet):nth-child(4n+5){--sl-card-border:var(--sl-color-blue);--sl-card-bg:var(--sl-color-blue-low)}.title:where(.astro-oag6qnet){font-weight:600;font-size:var(--sl-text-h4);color:var(--sl-color-white);line-height:var(--sl-line-height-headings);align-items:center;gap:1rem}.card:where(.astro-oag6qnet) .icon:where(.astro-oag6qnet){border:1px solid var(--sl-card-border);background-color:var(--sl-card-bg);border-radius:.25rem;flex-shrink:0;padding:.2em}.card:where(.astro-oag6qnet) .body:where(.astro-oag6qnet){font-size:clamp(var(--sl-text-sm), calc(.5rem + 1vw), var(--sl-text-body));margin:0}}
+</style></head><body class="astro-g5ptsecz"><a class="sl-skip-link astro-qb7clj6f" href="#_top">Skip to content</a><div class="page sl-flex astro-yntsjkba"><header class="header astro-yntsjkba"><div class="header astro-by6fddyj"><div class="title-wrapper sl-flex astro-by6fddyj"><a href="/" class="site-title sl-flex astro-6rvad3va"><img class="light:sl-hidden print:hidden astro-6rvad3va" alt src="/_astro/joust-emblem-on-dark.jQuOM2iw.svg" width="570" height="836"><img class="dark:sl-hidden print:block astro-6rvad3va" alt src="/_astro/joust-emblem.BEwrtsDr.svg" width="570" height="836"><span class="astro-6rvad3va" translate="no">JOUST</span></a></div><div class="sl-flex print:hidden astro-by6fddyj"><site-search class="astro-by6fddyj astro-b5kgnn7o" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"><button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-b5kgnn7o"><svg aria-hidden="true" class="astro-b5kgnn7o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span class="sl-hidden md:sl-block astro-b5kgnn7o" aria-hidden="true">Search</span><kbd class="sl-hidden md:sl-flex astro-b5kgnn7o" style="display: none"><kbd class="astro-b5kgnn7o">Ctrl</kbd><kbd class="astro-b5kgnn7o">K</kbd></kbd></button><dialog style="padding: 0" aria-label="Search" class="astro-b5kgnn7o"><div class="dialog-frame sl-flex astro-b5kgnn7o"><button data-close-modal class="sl-flex md:sl-hidden astro-b5kgnn7o">Cancel</button><div class="search-container astro-b5kgnn7o"><div id="starlight__search" class="astro-b5kgnn7o"></div></div></div></dialog></site-search><script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script><script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CibB10mu.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-by6fddyj"><div class="sl-flex social-icons astro-by6fddyj"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-yntsjkba" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-r2osgdlg"><svg aria-hidden="true" class="open-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-r2osgdlg astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-r2osgdlg">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super();let e=matchMedia(`(min-width: 50em)`),t=()=>{this.popover=e.matches?null:`auto`};t(),e.addEventListener(`change`,()=>t()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-yntsjkba"><div class="sidebar-content sl-flex astro-yntsjkba"><sl-sidebar-state-persist data-hash="0s6bmx6" class="astro-ipdry5cl"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-rmhv4bp6"><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Start here</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/start/why-joust/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Why JOUST</span></a></li><li class="astro-rmhv4bp6"><a href="/start/how-it-works/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">How JOUST works</span></a></li><li class="astro-rmhv4bp6"><a href="/start/install/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Install JOUST</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: Java &amp; Gradle</span></a></li><li class="astro-rmhv4bp6"><a href="/start/first-contract/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Your first contract</span></a></li><li class="astro-rmhv4bp6"><a href="/start/quick-start-npm/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Quick start: JavaScript &amp; TypeScript</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Vault: deposits, time and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/escrow-crowdfund/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Escrow and crowdfunding</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/token-merklemap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Token balances in a MerkleMap</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/bank-owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Bank: owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/pool-batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pool: batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/dex-assets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">DEX: native assets and LP tokens</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/multisig-treasury/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Multisig treasury</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/oracle-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Oracle and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/staked-vault/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staked vault and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrading a contract</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tutorials: JavaScript (experimental)</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/tutorials/counter-dapp/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">A counter dApp in the browser</span></a></li><li class="astro-rmhv4bp6"><a href="/tutorials/deploy-preview/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deploy to preview</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Writing contracts</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/contracts/state-and-lifecycle/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State and lifecycle</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/ctx-and-funds/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Ctx, funds and payouts</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/authorization/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Authorization</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/time/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Time</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/require-and-errors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Require and errors</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/params-invariants-events/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Params, invariants and events</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/merklemaps/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMaps</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/owned-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Owned objects</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/keyed-objects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/batched-intents/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Batched intents</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/assets-mints-sends/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Native assets, mints and sends</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/reads-and-composition/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Reads and composition</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/deposits/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Deposits</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/staking-and-governance/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Staking and governance</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/upgrades/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Upgrades and migration</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/fees-and-size/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Fees and script size</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/security-model/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Security model</span></a></li><li class="astro-rmhv4bp6"><a href="/contracts/testing/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Testing</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/gradle-builds/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Gradle builds</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/java-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The Java off-chain runtime</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Tools</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="5"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/playground/" aria-current="page" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The playground</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/dev-host/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The dev host</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Building apps: JavaScript (experimental)</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="6"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/apps/javascript-clients/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">JavaScript clients</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/wallets/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Wallets</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/pages/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Pages: worker, Vite, static builds</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/cli-and-projects/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">The joust CLI and projects</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/networks-and-providers/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Networks and chain providers</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/keyed-objects-js/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Keyed objects in JavaScript</span></a></li><li class="astro-rmhv4bp6"><a href="/apps/map-mirrors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">MerkleMap mirrors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Languages</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="7"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/languages/java/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc</span><span class="sl-badge caution small  astro-rmhv4bp6 astro-f4zorn72">Preview</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-reference/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc reference</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/jsc-std/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">.jsc standard library</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/typescript/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">TypeScript</span></a></li><li class="astro-rmhv4bp6"><a href="/languages/editors/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Editors</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: Java</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="8"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/annotations/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Annotations</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/state-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">State API (julc-state-api)</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/java-runtime-api/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Java runtime API</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference: JavaScript (experimental)</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="9"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/state-client/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/state-client</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-runtime/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust-runtime</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/joust-cli/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">@julclang/joust (CLI, Vite)</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/config/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">joust.config.json</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Reference</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="10"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/reference/description-format/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Contract description</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/examples/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Examples</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/troubleshooting/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Troubleshooting</span></a></li><li class="astro-rmhv4bp6"><a href="/reference/glossary/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Glossary</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">AI</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="11"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/ai/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Using JOUST with AI</span></a></li><li class="astro-rmhv4bp6"><a href="/ai/starter-pack/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">AI starter pack</span></a></li><li class="astro-rmhv4bp6"><a href="/llms.txt" class="astro-rmhv4bp6" target="_blank"><span class="astro-rmhv4bp6">llms.txt</span></a></li></ul></details></li><li class="astro-rmhv4bp6"><details open class="astro-rmhv4bp6"><summary class="astro-rmhv4bp6"><span class="group-label astro-rmhv4bp6"><span class="large astro-rmhv4bp6">Project</span></span><svg aria-hidden="true" class="caret astro-rmhv4bp6 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="12"></sl-sidebar-restore><ul class="astro-rmhv4bp6"><li class="astro-rmhv4bp6"><a href="/project/status-and-roadmap/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Status and roadmap</span></a></li><li class="astro-rmhv4bp6"><a href="/project/architecture-decisions/" class="astro-rmhv4bp6"><span class="astro-rmhv4bp6">Architecture decisions</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-p4azlveh"><div class="social-icons astro-p4azlveh"><a href="https://github.com/bloxbean/joust" rel="me" class="sl-flex astro-n2mnl6yq"><span class="sr-only astro-n2mnl6yq">GitHub</span><svg aria-hidden="true" class="astro-n2mnl6yq astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-2z5xp7gb"><span class="sr-only astro-2z5xp7gb">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-2z5xp7gb"><option value="dark" class="astro-2z5xp7gb">Dark</option><option value="light" class="astro-2z5xp7gb">Light</option><option value="auto" selected class="astro-2z5xp7gb">Auto</option></select><svg aria-hidden="true" class="icon caret astro-2z5xp7gb astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-yntsjkba"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-lrzkfocr"><aside class="right-sidebar-container print:hidden astro-lrzkfocr"><div class="right-sidebar astro-lrzkfocr"><div class="lg:sl-hidden astro-qok35upx"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-66cqc7ze"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-66cqc7ze"><details id="starlight__mobile-toc" class="astro-66cqc7ze"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-66cqc7ze"><span class="toggle sl-flex astro-66cqc7ze">On this page<svg aria-hidden="true" class="caret astro-66cqc7ze astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-66cqc7ze"></span></summary><div class="dropdown astro-66cqc7ze"><ul class="isMobile astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#start-it" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Start it</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#your-first-five-minutes" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Your first five minutes</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#what-the-page-shows" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">What the page shows</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#identities" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Identities</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#forms" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Forms</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#instances-state-and-views" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Instances, state and views</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#the-review-dialog" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">The review dialog</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#the-check-before-signing" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">The check before signing</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#history-log-and-the-attack-suite" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">History, log and the attack suite</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#offline-and-devkit" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Offline and DevKit</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#offline" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Offline</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#devkit" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">DevKit</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#rebuilds-and-new-sessions" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Rebuilds and new sessions</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#scenarios" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Scenarios</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#special-calls" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Special calls</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-jsc-abi-and-the-lock" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The .jsc ABI and the lock</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#flags" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Flags</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#ports-links-and-security" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Ports, links and security</span></a><ul class="isMobile astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#who-may-change-the-build-gradle" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Who may change the build (Gradle)</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#with-joust-dev" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">With joust dev</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#troubleshooting" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Troubleshooting</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#limitations" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Limitations</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C3fM4Kra.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-qok35upx"><div class="sl-container astro-qok35upx"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-jugkfwgx" style="--depth: 0;"><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#_top" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Overview</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#start-it" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Start it</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#your-first-five-minutes" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Your first five minutes</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#what-the-page-shows" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">What the page shows</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#identities" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Identities</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#forms" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Forms</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#instances-state-and-views" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Instances, state and views</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#the-review-dialog" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">The review dialog</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#the-check-before-signing" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">The check before signing</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#history-log-and-the-attack-suite" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">History, log and the attack suite</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#offline-and-devkit" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Offline and DevKit</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#offline" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Offline</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#devkit" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">DevKit</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#rebuilds-and-new-sessions" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Rebuilds and new sessions</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#scenarios" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Scenarios</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#special-calls" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Special calls</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#the-jsc-abi-and-the-lock" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">The .jsc ABI and the lock</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#flags" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Flags</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#ports-links-and-security" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Ports, links and security</span></a><ul class="astro-jugkfwgx" style="--depth: 1;"><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#who-may-change-the-build-gradle" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">Who may change the build (Gradle)</span></a></li><li style="--depth: 1;" class="astro-jugkfwgx"><a href="#with-joust-dev" style="--depth: 1;" class="astro-jugkfwgx"><span style="--depth: 1;" class="astro-jugkfwgx">With joust dev</span></a></li></ul></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#troubleshooting" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Troubleshooting</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#limitations" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Limitations</span></a></li><li style="--depth: 0;" class="astro-jugkfwgx"><a href="#next-steps" style="--depth: 0;" class="astro-jugkfwgx"><span style="--depth: 0;" class="astro-jugkfwgx">Next steps</span></a></li></ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.BpJaGz7G.js"></script></div></div></div></aside><div class="main-pane astro-lrzkfocr"><main data-pagefind-body class="astro-g5ptsecz" lang="en" dir="ltr"><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><h1 id="_top" class="astro-bebwqqxs">The playground</h1></div></div><div class="content-panel astro-a7po4psb"><div class="sl-container astro-a7po4psb"><div class="sl-markdown-content">
+<p><code dir="auto">joust playground</code> builds your project and opens a page in your browser where you can call every contract it
+contains. You do not write a client or a page first. The page lists your contracts, gives you three test
+identities (Alice, Bob and Carol), and draws a form for each call. Each transaction is checked by the page and shown
+to you before an identity signs it. By default it runs offline, on an in-memory ledger, so you need no network.</p>
+<p>Behind the page, a small process called the <a href="/apps/dev-host/">dev host</a> runs your project’s own JOUST to prepare each
+transaction. The page checks what the dev host prepared, you review it, and an identity signs it.</p>
+<p>Use it after a quick start, to try a contract by hand, to see a refusal for yourself, or to replay a scenario after
+a change.</p>
+<aside aria-label="Experimental" class="starlight-aside starlight-aside--caution"><p class="starlight-aside__title" aria-hidden="true"><svg aria-hidden="true" class="starlight-aside__icon astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 16a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm10.67 1.47-8.05-14a3 3 0 0 0-5.24 0l-8 14A3 3 0 0 0 3.94 22h16.12a3 3 0 0 0 2.61-4.53Zm-1.73 2a1 1 0 0 1-.88.51H3.94a1 1 0 0 1-.88-.51 1 1 0 0 1 0-1l8-14a1 1 0 0 1 1.78 0l8.05 14a1 1 0 0 1 .05 1.02v-.02ZM12 8a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0V9a1 1 0 0 0-1-1Z"/></svg>Experimental</p><div class="starlight-aside__content"><p>JOUST is pre-release software. The playground runs on JOUST’s npm packages, in Gradle projects too, and its offline
+ledger evaluates scripts with the runtime engine, which is WebAssembly built with GraalVM Web Image. Both are
+experimental.</p></div></aside>
+<div class="sl-heading-wrapper level-h2"><h2 id="start-it">Start it</h2><a class="sl-anchor-link" href="#start-it"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Start it”</span></a></div>
+<p>You need <strong>Node.js 22 or newer</strong> on both paths. Run the command in your project’s directory.</p>
+<starlight-tabs class="astro-scn3uvmv"><div class="tablist-wrapper not-content astro-scn3uvmv"><ul role="tablist" class="astro-scn3uvmv"><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-0-0" id="tab-0-0" aria-selected="true" tabindex="0" class="astro-scn3uvmv">Gradle project</a></li><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-0-1" id="tab-0-1" aria-selected="false" tabindex="-1" class="astro-scn3uvmv">npm project</a></li></ul></div><div id="tab-panel-0-0" aria-labelledby="tab-0-0" role="tabpanel"><div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.tpect.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">joust</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">playground</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="joust playground"><div></div></button></div></figure></div><p>This is the native <code dir="auto">joust</code> (<a href="/start/install/">Install JOUST</a>). It does not run a copy of the playground from your
+project. The first time, it installs the <code dir="auto">@julclang/joust</code> package of its own version into a per-user cache,
+<code dir="auto">~/.joust/playground/&#x3C;version></code>, with npm. Later runs reuse the cache. <code dir="auto">node</code> (22 or newer) and <code dir="auto">npm</code> must be on
+<code dir="auto">PATH</code> every time; npm installs only the first time. Then it runs <code dir="auto">./gradlew build joustHostSpec</code> with your build’s
+own wrapper.</p><div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">joust playground: installing @julclang/joust &#x3C;version> into &#x3C;home>/.joust/playground/&#x3C;version> (once)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">joust playground: ./gradlew build joustHostSpec (in &#x3C;project>)</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#e6edf3;--1:#24292e">  </span></span><span style="--0:#e6edf3;--1:#24292e">gradle: ...</span></div></div><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">joust playground (offline, Gradle): http://127.0.0.1:&#x3C;port>/ (opened in your browser)</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#e6edf3;--1:#24292e">  </span></span><span style="--0:#e6edf3;--1:#24292e">no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#e6edf3;--1:#24292e">  </span></span><span style="--0:#e6edf3;--1:#24292e">Ctrl-C stops the playground.</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="joust playground: installing @julclang/joust <version> into <home>/.joust/playground/<version> (once)joust playground: ./gradlew build joustHostSpec (in <project>)  gradle: ...joust playground (offline, Gradle): http://127.0.0.1:<port>/ (opened in your browser)  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link  Ctrl-C stops the playground."><div></div></button></div></figure></div><p>The project needs the Gradle plugin <code dir="auto">org.julclang.joust</code>, which <code dir="auto">joust new</code> applies. A build that adds JOUST’s
+dependencies by hand has no <code dir="auto">joustHostSpec</code> task (<a href="/apps/gradle-builds/">Gradle builds</a>).</p></div><div id="tab-panel-0-1" aria-labelledby="tab-0-1" role="tabpanel" hidden><div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">npx</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">joust</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">playground</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="npx joust playground"><div></div></button></div></figure></div><p>This runs your project’s own <code dir="auto">@julclang/joust</code> (run <code dir="auto">npm install</code> first). The native <code dir="auto">joust playground</code> does the same
+in an npm project: it hands over to the project’s copy. The template has no <code dir="auto">playground</code> script; add
+<code dir="auto">"playground": "joust playground"</code> to <code dir="auto">package.json</code> if you want <code dir="auto">npm run playground</code>.</p><p>It builds first, as <code dir="auto">joust build</code> does, then starts the playground:</p><div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">...</span></div></div><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">joust playground (offline): http://127.0.0.1:&#x3C;port>/ (opened in your browser)</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#e6edf3;--1:#24292e">  </span></span><span style="--0:#e6edf3;--1:#24292e">no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#e6edf3;--1:#24292e">  </span></span><span style="--0:#e6edf3;--1:#24292e">Ctrl-C stops the playground.</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="...joust playground (offline): http://127.0.0.1:<port>/ (opened in your browser)  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link  Ctrl-C stops the playground."><div></div></button></div></figure></div><p>The playground reads the build from <code dir="auto">build/joust</code>. A project whose <code dir="auto">out</code> in <code dir="auto">joust.config.json</code> is another folder is
+refused.</p></div></starlight-tabs><script type="module">var e=class e extends HTMLElement{static#e=new Map;tabs;panels;#t;#n=`starlight-synced-tabs__`;constructor(){super();let t=this.querySelector(`[role="tablist"]`);if(this.tabs=[...t.querySelectorAll(`[role="tab"]`)],this.panels=[...this.querySelectorAll(`:scope > [role="tabpanel"]`)],this.#t=this.dataset.syncKey,this.#t){let t=e.#e.get(this.#t)??[];t.push(this),e.#e.set(this.#t,t)}this.tabs.forEach((e,n)=>{e.addEventListener(`click`,e=>{e.preventDefault();let r=t.querySelector(`[aria-selected="true"]`);e.currentTarget!==r&&this.switchTab(e.currentTarget,n)}),e.addEventListener(`keydown`,e=>{let t=this.tabs.indexOf(e.currentTarget),n=e.key===`ArrowLeft`?t-1:e.key===`ArrowRight`?t+1:e.key===`Home`?0:e.key===`End`?this.tabs.length-1:null;n!==null&&this.tabs[n]&&(e.preventDefault(),this.switchTab(this.tabs[n],n))})})}switchTab(t,n,r=!0){if(!t)return;let i=r?this.getBoundingClientRect().top:0;this.tabs.forEach(e=>{e.setAttribute(`aria-selected`,`false`),e.setAttribute(`tabindex`,`-1`)}),this.panels.forEach(e=>{e.hidden=!0});let a=this.panels[n];a&&(a.hidden=!1),t.removeAttribute(`tabindex`),t.setAttribute(`aria-selected`,`true`),r&&(t.focus(),e.#i(this,t),window.scrollTo({top:window.scrollY+(this.getBoundingClientRect().top-i),behavior:`instant`}))}#r(e){this.#t&&typeof localStorage<`u`&&localStorage.setItem(this.#n+this.#t,e)}static#i(t,n){let r=t.#t,i=e.#a(n);if(!r||!i)return;let a=e.#e.get(r);if(a){for(let n of a){if(n===t)continue;let r=n.tabs.findIndex(t=>e.#a(t)===i);r!==-1&&n.switchTab(n.tabs[r],r,!1)}t.#r(i)}}static#a(e){return e.textContent?.trim()}};customElements.define(`starlight-tabs`,e);</script>
+<p>The browser opens the page. <strong>Ctrl-C</strong> in the terminal stops the playground.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="your-first-five-minutes">Your first five minutes</h2><a class="sl-anchor-link" href="#your-first-five-minutes"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Your first five minutes”</span></a></div>
+<a href="/_astro/playground-start.C6cRitZL.webp" title="Open the full-size image"><img src="/_astro/playground-start.C6cRitZL.webp" width="2000" height="1250" alt="The playground on first load: the OFFLINE banner, the identities Alice, Bob and Carol, the Counter contract with its operations, and the empty History and Log"/></a>
+<p><em>The whole page on first load (open the image for full size).</em></p>
+<p>The page has three columns. On the left: <strong>Identities</strong> (who signs) and <strong>Contracts</strong> (this project’s build). In the
+middle: the chosen contract’s <strong>Instances</strong> (with their state), its <strong>Views</strong>, and its <strong>Operations</strong>, one card per
+call. On the right: <strong>History</strong> (newest first) and <strong>Log</strong>. The banner at the top says the mode (<strong>OFFLINE</strong> or
+<strong>DEVKIT</strong>), the current slot and the build’s fingerprint.</p>
+<p>With the Counter from either quick start (<a href="/start/quick-start-java/">Java</a>, or
+<a href="/start/quick-start-npm/">JavaScript</a>, where it is a <code dir="auto">.jsc</code> contract):</p>
+<ol role="list" class="sl-steps">
+<li>
+<p><strong>Pick the contract.</strong> Click <code dir="auto">Counter</code> under <strong>Contracts</strong>. Its operations appear as cards: <code dir="auto">init</code>, <code dir="auto">increment</code>,
+<code dir="auto">reset</code> and <code dir="auto">close</code>. Alice is the signer: her row has the <strong>SIGNS</strong> tag, and the <strong>Operations</strong> panel says “Signing as
+Alice”.</p>
+</li>
+<li>
+<p><strong>Create an instance.</strong> Click <strong>Review…</strong> on the <code dir="auto">init</code> card. The first call to a contract publishes what it needs
+first (here, its reference script), so you see a <strong>Review publication</strong> dialog before the call’s own <strong>Review: init</strong>
+dialog. Check each one and click <strong>Approve and sign as Alice</strong>. The new instance appears under <strong>Instances</strong> with
+its state, marked <strong>SELECTED</strong>.</p>
+</li>
+<li>
+<p><strong>Call an action.</strong> Type <code dir="auto">5</code> into <code dir="auto">by</code> on the <code dir="auto">increment</code> card and click <strong>Review…</strong>. The dialog shows the state
+before and after. Approve it. The instance’s state now shows the count 5.</p>
+</li>
+<li>
+<p><strong>See a refusal.</strong> Choose Bob under <strong>Identities</strong> and click <strong>Review…</strong> on <code dir="auto">reset</code>. <code dir="auto">reset</code> is owner-only, so the
+dev host refuses it before anything is signed. The history shows “Bob: reset failed at stage host”.</p>
+</li>
+<li>
+<p><strong>Decline one.</strong> As Alice, start another <code dir="auto">increment</code> and click <strong>Decline</strong>. Nothing is signed or sent, and the
+history shows “declined”.</p>
+</li>
+</ol>
+<p><img src="/_astro/playground-state.Cpm3s9kB_Z1kzvG1.webp" alt="After the steps: the counter’s state shows count 5, and the History shows Bob’s reset refused at stage host above Alice’s confirmed calls, each with its attack-suite result" loading="lazy" decoding="async" width="2116" height="770"></p>
+<p>That loop (pick, fill in, review, approve) is all there is to every call. The rest of this page is the detail.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="what-the-page-shows">What the page shows</h2><a class="sl-anchor-link" href="#what-the-page-shows"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “What the page shows”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="identities">Identities</h3><a class="sl-anchor-link" href="#identities"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Identities”</span></a></div>
+<p>Offline, Alice, Bob and Carol are fresh keys made in the page. Their keys stay in the page’s memory: they are never
+sent to the server, stored or exported. The server only learns their addresses, and funds each with 1,000 ADA on the
+offline ledger. <strong>+ identity</strong> adds another (Dave, Erin, and so on), funded the same way.</p>
+<p>The radio button beside an identity picks the signer. A form field that holds a key hash (a field whose name contains
+<code dir="auto">hash</code>, <code dir="auto">key</code>, <code dir="auto">owner</code>, <code dir="auto">caller</code>, <code dir="auto">signer</code> or <code dir="auto">pkh</code>) offers “an identity’s key hash…”, so you can fill in Bob’s key
+hash without copying it.</p>
+<p>A reload of the page loses the keys. It starts a new session with new identities.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="forms">Forms</h3><a class="sl-anchor-link" href="#forms"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Forms”</span></a></div>
+<p>Each call’s form is generated from its argument types in the contract’s description:</p>
+<table>
+<thead>
+<tr>
+<th>Argument type</th>
+<th>Control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>integer</td>
+<td>a text field, read as a big integer</td>
+</tr>
+<tr>
+<td>bytes</td>
+<td>hex, with a “text (UTF-8) → hex” helper; key hash fields also offer an identity’s key hash</td>
+</tr>
+<tr>
+<td><code dir="auto">Bool</code></td>
+<td>a checkbox</td>
+</tr>
+<tr>
+<td><code dir="auto">Optional</code></td>
+<td>a “some” checkbox and the inner control</td>
+</tr>
+<tr>
+<td>a record or sealed type</td>
+<td>a variant selector (for a sum type) and a control per field</td>
+</tr>
+<tr>
+<td>list</td>
+<td><strong>+ item</strong> rows of the inner control</td>
+</tr>
+<tr>
+<td>map</td>
+<td><strong>+ item</strong> rows of key and value (keys must be integers or bytes)</td>
+</tr>
+<tr>
+<td><code dir="auto">Value</code></td>
+<td><strong>+ asset</strong> rows of policy, name and quantity</td>
+</tr>
+</tbody>
+</table>
+<p>A <code dir="auto">@Payable</code> call has a <strong>pay (lovelace)</strong> field, and a call that takes assets has a <strong>pay (assets)</strong> field (one
+<code dir="auto">&lt;policy hex&gt;.&lt;asset name hex&gt; &lt;quantity&gt;</code> per line). An owned-object call asks for the object id, and a keyed call
+for the key, both in hex. Any other type (untyped Plutus data, say) is shown as <strong>UNSUPPORTED</strong> with the field’s path,
+and the call cannot run. The page never guesses an encoding.</p>
+<p>A value the form cannot read (<code dir="auto">1.5</code> for an integer, say) fails at stage <code dir="auto">arguments</code> before anything is sent.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="instances-state-and-views">Instances, state and views</h3><a class="sl-anchor-link" href="#instances-state-and-views"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Instances, state and views”</span></a></div>
+<p><strong>Instances</strong> lists every instance of the contract on the ledger, with its current state. Click one to select it: an
+action needs a selected instance (“choose an instance first”). A contract with owned objects lists the selected
+instance’s <strong>Owned objects</strong> below it.</p>
+<p><strong>Views</strong> runs a contract’s named <code dir="auto">@View</code> methods: fill in the arguments and click <strong>Run view</strong>. A view signs
+nothing. Named views run only on the JVM dev host, so only in Gradle projects. In an npm project the page says that
+views are not available there; the instance’s state is still shown.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="the-review-dialog">The review dialog</h3><a class="sl-anchor-link" href="#the-review-dialog"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The review dialog”</span></a></div>
+<p>Before any identity signs, the page shows a review dialog. Everything in it is read from the transaction body and
+the chain, not from what the dev host claims:</p>
+<p><img src="/_astro/playground-review.wWx0FWDz_Z23w9Qi.webp" alt="The review dialog for init: signer, transaction id, fee, what Alice pays in all, validity, signers, scripts run, outputs, the state before and after, and the Decline and Approve and sign as Alice buttons" loading="lazy" decoding="async" width="2000" height="1818"></p>
+<table>
+<thead>
+<tr>
+<th>Row</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>signer, co-signers</td>
+<td>who signs, with key hashes</td>
+</tr>
+<tr>
+<td>transaction</td>
+<td>the transaction hash</td>
+</tr>
+<tr>
+<td>fee</td>
+<td>the fee in ADA</td>
+</tr>
+<tr>
+<td><code dir="auto">&lt;signer&gt;, in all</code></td>
+<td>what the signer pays and receives, net</td>
+</tr>
+<tr>
+<td>validity</td>
+<td>the validity window in slots, and the current slot</td>
+</tr>
+<tr>
+<td>signers</td>
+<td>the required signers</td>
+</tr>
+<tr>
+<td>scripts run</td>
+<td>the number of redeemers, one per script the transaction runs</td>
+</tr>
+<tr>
+<td>outputs</td>
+<td>each output’s address and ADA, the number of other assets it holds, and whether it has a datum</td>
+</tr>
+</tbody>
+</table>
+<p>Below the table, <strong>Before (on the chain)</strong> and <strong>After (in this transaction)</strong> show the state change (“none: a
+creation”, “removed: a destroy”). The dev host’s own prediction is folded away under “The dev host’s prediction
+(unchecked, not used to decide)”.</p>
+<p><strong>Approve and sign as <code dir="auto">&lt;name&gt;</code></strong> signs; <strong>Decline</strong> (or Escape) discards the body, and its inputs are free again. The
+dialog opens with the focus on its title, so a key press cannot approve it before you have seen it.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="the-check-before-signing">The check before signing</h3><a class="sl-anchor-link" href="#the-check-before-signing"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The check before signing”</span></a></div>
+<p>A call goes through these stages, and a failure names its stage in the history and the log:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">arguments</code></td>
+<td>the form’s values are read</td>
+</tr>
+<tr>
+<td><code dir="auto">host</code></td>
+<td>the dev host prepares the transaction; a contract’s <code dir="auto">Require</code> refusal stops here</td>
+</tr>
+<tr>
+<td><code dir="auto">verification</code></td>
+<td>the page checks the body</td>
+</tr>
+<tr>
+<td><code dir="auto">wallet</code></td>
+<td>the identity signs (or you decline)</td>
+</tr>
+<tr>
+<td><code dir="auto">ledger</code></td>
+<td>the transaction is submitted: the offline ledger’s rule, or the node’s error</td>
+</tr>
+<tr>
+<td><code dir="auto">confirmation</code></td>
+<td>DevKit only: the transaction is included, then final</td>
+</tr>
+</tbody>
+</table>
+<p>At stage <code dir="auto">verification</code> the page checks the body with <code dir="auto">@julclang/state-client</code>. A call runs two independent checks:
+the dev host protocol’s reference checker (<code dir="auto">verifyHostResult</code>) and then the page verifier (<code dir="auto">verifyPrepared</code>). A keyed
+call runs only the reference checker, which holds the keyed rules. A publication runs the reference checker and then
+<code dir="auto">verifyPublication</code>. The contract’s script hash and address come from the build the session pinned, never from the
+dev host. The fee must be at most 5 ADA. If a check finds a problem, the page refuses to sign (“the page refused to
+sign: …”). When you open a contract, the page
+also compares the dev host’s deployment with the pinned build, and refuses a mismatch.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="history-log-and-the-attack-suite">History, log and the attack suite</h3><a class="sl-anchor-link" href="#history-log-and-the-attack-suite"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “History, log and the attack suite”</span></a></div>
+<p><strong>History</strong> lists every call with its outcome: confirmed, declined, or failed at a stage with its code and message.
+A <code dir="auto">.jsc</code> contract’s refusal also names its source site. If a submission’s answer is lost, the entry says “outcome
+unknown” with a <strong>recheck</strong> button: check it before you try the call again.</p>
+<p>Offline, the ledger runs the <strong>attack suite</strong> on every transaction that runs a script. It mutates the transaction (the
+state datum replaced or hashed, one lovelace skimmed, token dust added, the output sent to a key address or given a
+stake credential, the output dropped, the required signer replaced, the validity bounds moved or removed) and checks
+that the scripts refuse each mutation. The history shows “attacks run: N; accepted by the scripts: M”. An accepted
+attack is a warning in the log (“the scripts ACCEPTED the attack …”) and means your validator lets something through
+that it should not. The checkbox <strong>attack suite on every script transaction</strong> in the banner turns it off for the
+session.</p>
+<p><strong>Log</strong> has one line per event, prefixed with the slot.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="offline-and-devkit">Offline and DevKit</h2><a class="sl-anchor-link" href="#offline-and-devkit"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Offline and DevKit”</span></a></div>
+<p>The banner says which mode a session runs in. Each mode proves different things.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Offline (default)</th>
+<th>DevKit (<code dir="auto">--mode devkit</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chain</td>
+<td>an in-memory ledger in the playground</td>
+<td>your Yaci DevKit, read through Yaci Store</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>none: it makes no network request</td>
+<td>DevKit’s node</td>
+</tr>
+<tr>
+<td>Who decides</td>
+<td>the ledger’s modelled phase-1 rules, and the scripts under JuLC’s VM</td>
+<td>the node’s ledger rules and the scripts</td>
+</tr>
+<tr>
+<td>Attack suite</td>
+<td>on, with a toggle</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Time</td>
+<td><strong>Advance time (s)</strong> moves the ledger’s clock</td>
+<td>the network’s own; it cannot be advanced</td>
+</tr>
+<tr>
+<td>Settlement</td>
+<td>at once</td>
+<td>submitted, then included in a block, then final 10 slots later</td>
+</tr>
+<tr>
+<td>Identities</td>
+<td>fresh keys, funded from nowhere</td>
+<td>DevKit’s public test mnemonic, topped up from the faucet</td>
+</tr>
+<tr>
+<td>CIP-30 wallets</td>
+<td>no</td>
+<td><strong>Connect wallet</strong></td>
+</tr>
+<tr>
+<td>Scenarios</td>
+<td>export and import</td>
+<td>not offered</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="offline">Offline</h3><a class="sl-anchor-link" href="#offline"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Offline”</span></a></div>
+<p>Offline success means: the dev host built the transaction with your project’s own JOUST, the page’s checks passed,
+the in-memory ledger’s modelled phase-1 rules passed, and the scripts accepted it under JuLC’s VM. It is not a node’s
+acceptance and not a proof. The banner says so, and its fold “What the offline ledger checks, refuses and does not
+model” lists the rules. They are the rules of <code dir="auto">@julclang/joust/test</code>’s ledger (<a href="/reference/joust-cli/#offline-tests">offline
+tests</a>):</p>
+<ul>
+<li><strong>Checks</strong>, under the node’s error names: validity tag, size, inputs, validity interval, withdrawals, value
+conservation, minimum ADA, maximum value size, network ids, auxiliary-data hash, fee, witnesses, redeemers, datums,
+collateral, script integrity hash, execution units, stake registration and deregistration.</li>
+<li><strong>Refuses</strong> as “not modelled offline: try DevKit”: votes, proposals, treasury donations and values, every certificate
+but stake registration and deregistration, and invalid-tagged transactions. Such a refusal is not a contract
+failure.</li>
+<li><strong>Does not model</strong>: rewards (withdrawals take 0), PlutusV1’s integrity hash, collateral loss on a failing script,
+rollbacks.</li>
+</ul>
+<p>The offline network has network id 0. A transaction’s validity window is 120 slots (one slot is one second).
+<strong>Advance time (s)</strong> moves the clock by the seconds you type, which is how you test a <code dir="auto">@ValidAfter</code> deadline or a
+<code dir="auto">Clock</code> check.</p>
+<p>The offline banner also has <strong>Reset ledger</strong>: a new ledger and a new dev host, with the same identities funded again
+and the history cleared.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="devkit">DevKit</h3><a class="sl-anchor-link" href="#devkit"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “DevKit”</span></a></div>
+<p>Start DevKit first, in a terminal of its own (<a href="/start/install/">Install JOUST</a> shows how to install it):</p>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">npm</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">install</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">-g</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">@bloxbean/yaci-devkit</span><span style="--0:#E6EDF3;--1:#24292E">     </span><span style="--0:#8B949E;--1:#616972"># once</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">yaci-devkit</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">up</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">--enable-yaci-store</span><span style="--0:#E6EDF3;--1:#24292E">       </span><span style="--0:#8B949E;--1:#616972"># leave it running</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="npm install -g @bloxbean/yaci-devkit     # onceyaci-devkit up --enable-yaci-store       # leave it running"><div></div></button></div></figure></div>
+<p>Then, in your project:</p>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">joust</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">playground</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">--mode</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">devkit</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="joust playground --mode devkit"><div></div></button></div></figure></div>
+<p>DevKit mode attaches to the project’s development network as <code dir="auto">joust dev</code> does. In an npm project that is
+<code dir="auto">joust.config.json</code>’s <code dir="auto">network</code> (default <code dir="auto">devkit</code>), or the one <code dir="auto">--network &lt;name&gt;</code> names. A Gradle project uses the
+built-in <code dir="auto">devkit</code> network: Yaci Store at <code dir="auto">http://localhost:8080/api/v1</code> and its admin API at <code dir="auto">http://localhost:10000</code>.
+If the network does not answer and its config entry has a <code dir="auto">start</code> command, the playground runs it and waits.</p>
+<p>Only a Yaci DevKit is accepted: the network must have an admin API and network id 0, and the chain is read through
+Yaci Store’s API (an <code dir="auto">ogmios</code> provider is refused). The playground never runs on mainnet, and public testnets are not
+supported. Before it does anything it checks that Yaci Store serves the same chain as the admin API.</p>
+<p>Transactions go to DevKit’s node. The history shows each one as submitted, then “included in slot N”, then final;
+state is refreshed only after inclusion. A transaction that is never included is shown as expired or not confirmed,
+never as confirmed.</p>
+<p>The test identities are labelled <strong>test-only</strong>: “Alice (DevKit #1)” and so on. They are accounts of DevKit’s public
+test mnemonic, derived in the page, so anyone can derive their keys. Never use them with real funds. When an identity
+holds less than 100 ADA, the playground tops it up with 1,000 ADA from the DevKit faucet.</p>
+<p>Two options in <code dir="auto">joust.config.json</code> tune DevKit mode in an npm project:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">playground.ttlMs</code></td>
+<td>60 000</td>
+<td>the validity window asked for each transaction, in ms (capped by DevKit’s stability window)</td>
+</tr>
+<tr>
+<td><code dir="auto">playground.identityBase</code></td>
+<td>1</td>
+<td>the account index of the first test identity in DevKit’s mnemonic</td>
+</tr>
+</tbody>
+</table>
+<p>The DevKit banner has <strong>Refresh</strong> and <strong>New session</strong>. A playground server keeps one DevKit session: a second tab
+that starts one closes the first (“another tab took this DevKit session: this one is closed”).</p>
+<div class="sl-heading-wrapper level-h4"><h4 id="connect-wallet-cip-30">Connect wallet (CIP-30)</h4><a class="sl-anchor-link" href="#connect-wallet-cip-30"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Connect wallet (CIP-30)”</span></a></div>
+<p>In DevKit mode, <strong>Connect wallet (CIP-30)</strong> under the identities lists the browser wallets the page finds, Yano
+first. Pick one and click <strong>Connect</strong>. The page refuses a wallet that is not on network id 0. Network id 0 does not
+tell DevKit from a public testnet, so point the wallet at this DevKit: a wallet that follows another chain fails later,
+when the dev host prepares the call or when the page reads the wallet again before it signs. A connected wallet becomes an identity (tagged <strong>CIP-30</strong>) and the signer, and it is topped up from the
+faucet like the test identities. The page’s checks and review are the same; then the wallet signs.</p>
+<p>Just before the wallet signs, the page reads it again: same network, same change address, and every input the body
+spends from the wallet must be one the wallet holds and DevKit shows unspent. Once a body has gone to a wallet, it is
+never discarded: if it does not land, its inputs are released when it expires.</p>
+<div class="sl-heading-wrapper level-h4"><h4 id="the-journal">The journal</h4><a class="sl-anchor-link" href="#the-journal"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The journal”</span></a></div>
+<p>On DevKit the playground keeps a journal of every transaction body it has handed out for signing, until that body is
+final or expired. It lives in a per-user state directory, <code dir="auto">~/.joust/state</code> (<code dir="auto">JOUST_STATE_DIR</code> moves it), never in the
+project. It is kept per project and per chain. A chain is identified by its network id, protocol magic and genesis
+start time, so a reset DevKit is a new chain with an empty journal. The journal of an earlier chain is removed, and
+the log says so.</p>
+<p>When you start the playground again, the new session restores the journal (“N journaled transaction(s) restored”)
+and follows those transactions to their end. Only one playground at a time can use a project’s journal on one DevKit.
+If DevKit’s chain goes back below transactions that had already settled, the session builds nothing until the chain
+passes that point again.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="rebuilds-and-new-sessions">Rebuilds and new sessions</h2><a class="sl-anchor-link" href="#rebuilds-and-new-sessions"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Rebuilds and new sessions”</span></a></div>
+<p>A <strong>session</strong> is one mode, one chain, one build and one dev host process. The session pins the build it started with:
+the dev host runs a private, verified copy of it, so a rebuild does not change a running session.</p>
+<p>When you rebuild, the banner says “The project was rebuilt.” and the session prepares nothing more. Start a new
+session from the banner:</p>
+<ul>
+<li>Offline: <strong>New session, keep the ledger</strong> keeps the balances and outputs. An instance of a contract whose script
+changed stays at the old script’s address. <strong>New session, empty ledger</strong> starts again.</li>
+<li>DevKit: <strong>New session on the new build</strong>.</li>
+</ul>
+<starlight-tabs class="astro-scn3uvmv"><div class="tablist-wrapper not-content astro-scn3uvmv"><ul role="tablist" class="astro-scn3uvmv"><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-1-0" id="tab-1-0" aria-selected="true" tabindex="0" class="astro-scn3uvmv">Gradle project</a></li><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-1-1" id="tab-1-1" aria-selected="false" tabindex="-1" class="astro-scn3uvmv">npm project</a></li></ul></div><div id="tab-panel-1-0" aria-labelledby="tab-1-0" role="tabpanel" tabindex="0"><p>Rebuild with <code dir="auto">./gradlew build</code>. The new session runs <code dir="auto">./gradlew build joustHostSpec</code> again, with its gates, and pins
+the new build. The playground copies the build into a private snapshot in the system’s temporary directory, checks
+every file’s hash, and runs the JVM dev host on the copy. The copy is deleted when the dev host exits.</p></div><div id="tab-panel-1-1" aria-labelledby="tab-1-1" role="tabpanel" tabindex="0" hidden><p>Rebuild with <code dir="auto">npx joust build</code> in another terminal. The new session pins whatever <code dir="auto">build/joust</code> holds then; it does
+not build.</p></div></starlight-tabs>
+<p>Offline, a server keeps at most four sessions; when a fifth starts, the least recently used one ends.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="scenarios">Scenarios</h2><a class="sl-anchor-link" href="#scenarios"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Scenarios”</span></a></div>
+<p>Offline, the banner has <strong>Export scenario</strong> and <strong>Import scenario</strong>.</p>
+<p><strong>Export scenario</strong> downloads <code dir="auto">scenario.json</code>: the session’s calls in order, each with its identity’s label, its
+arguments and its outcome, plus every time advance and the ledger’s clock. It holds no key, mnemonic or transaction
+bytes. Identities are labels, and values that were an identity’s key hash or address, or an instance a step created,
+are written as references.</p>
+<p><strong>Import scenario</strong> replays a scenario in a fresh offline session with new identities, one per label. Each step runs
+through the same checks (without the review dialog) and the log says whether its outcome matched: “scenario
+replayed: N of M call(s) with the same outcome”. The scenario’s clock is used, so a deadline in it means what it
+meant. A scenario from another build is allowed, with a warning that names the contracts whose scripts differ.</p>
+<p>Limits: a scenario is at most 1 MiB, 16 identities and 500 steps. A session that kept an earlier ledger cannot be
+exported.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="special-calls">Special calls</h2><a class="sl-anchor-link" href="#special-calls"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Special calls”</span></a></div>
+<ul>
+<li><strong><code dir="auto">@Quorum</code> calls</strong> show a <strong>co-signers</strong> field: tick the identities that co-sign. Each one approves and signs the
+same checked body. The signer and co-signers are the page’s identities, not a connected wallet.</li>
+<li><strong>Keyed calls</strong> (<a href="/contracts/keyed-objects/">keyed objects</a>) each spend a designated input: an ordinary output of
+the signer, of at least 5 ADA and holding only ADA. The page records the operation before it asks for the first
+body. <strong>Pending keyed operations</strong> under the identities lists them, with <strong>Release</strong>, <strong>Acknowledge</strong> or <strong>Done</strong>
+buttons where the outcome needs you. One keyed call is in flight at a time. On DevKit the records are kept in the
+journal, so they survive a reload, and a retry after a reload never makes a second instance. Offline, the records
+belong to the session’s ledger.</li>
+<li><strong>Sends and MerkleMaps</strong> need JOUST’s shared verifiers; the page takes them from the pinned build and checks their
+claims.</li>
+</ul>
+<div class="sl-heading-wrapper level-h2"><h2 id="the-jsc-abi-and-the-lock">The <code dir="auto">.jsc</code> ABI and the lock</h2><a class="sl-anchor-link" href="#the-jsc-abi-and-the-lock"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The .jsc ABI and the lock”</span></a></div>
+<p>The playground builds through the same gates as a normal build. It never accepts a changed <code dir="auto">.jsc</code> interface or library
+lock unless you say so.</p>
+<starlight-tabs class="astro-scn3uvmv"><div class="tablist-wrapper not-content astro-scn3uvmv"><ul role="tablist" class="astro-scn3uvmv"><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-2-0" id="tab-2-0" aria-selected="true" tabindex="0" class="astro-scn3uvmv">Gradle project</a></li><li role="presentation" class="tab astro-scn3uvmv"><a role="tab" href="#tab-panel-2-1" id="tab-2-1" aria-selected="false" tabindex="-1" class="astro-scn3uvmv">npm project</a></li></ul></div><div id="tab-panel-2-0" aria-labelledby="tab-2-0" role="tabpanel"><p><code dir="auto">./gradlew build</code> runs <code dir="auto">checkJscAbi</code> and the lock check, so a changed <code dir="auto">.jsc</code> interface fails the playground’s build.
+Accept an intended change with Gradle and commit it:</p><div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">acceptJscAbi</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">./gradlew</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">acceptJoustLock</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="./gradlew acceptJscAbi./gradlew acceptJoustLock"><div></div></button></div></figure></div><p><code dir="auto">--accept-abi</code> and <code dir="auto">--accept-lock</code> are refused in a Gradle project: “in a Gradle build, accept an ABI or lock change
+with ./gradlew acceptJscAbi or ./gradlew acceptJoustLock (and commit it); the playground never accepts one”.</p></div><div id="tab-panel-2-1" aria-labelledby="tab-2-1" role="tabpanel" hidden><p>A changed <a href="/languages/jsc/#the-abi-manifest">ABI manifest</a> or an unpinned <a href="/languages/jsc-reference/#library-packages-and-joustlock">library
+package</a> fails the build, as in <code dir="auto">joust build</code>. Accept an
+intended change with the flag, then review and commit the file it writes:</p><div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="sh"><code><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">npx</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">joust</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">playground</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">--accept-abi</span></div></div><div class="ec-line"><div class="code"><span style="--0:#FFA657;--1:#6F42C1">npx</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">joust</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#A5D6FF;--1:#032F62">playground</span><span style="--0:#E6EDF3;--1:#24292E"> </span><span style="--0:#79C0FF;--1:#005CC5">--accept-lock</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="npx joust playground --accept-abinpx joust playground --accept-lock"><div></div></button></div></figure></div></div></starlight-tabs>
+<div class="sl-heading-wrapper level-h2"><h2 id="flags">Flags</h2><a class="sl-anchor-link" href="#flags"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Flags”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">--mode offline|devkit</code></td>
+<td><code dir="auto">offline</code></td>
+<td>the chain: the in-memory ledger, or Yaci DevKit</td>
+</tr>
+<tr>
+<td><code dir="auto">--network &lt;name&gt;</code></td>
+<td>npm: the config’s <code dir="auto">network</code>; Gradle: <code dir="auto">devkit</code></td>
+<td>DevKit mode’s network; refused offline. A Gradle project accepts only <code dir="auto">devkit</code></td>
+</tr>
+<tr>
+<td><code dir="auto">--port &lt;port&gt;</code></td>
+<td>a free port</td>
+<td>the port the server listens on</td>
+</tr>
+<tr>
+<td><code dir="auto">--accept-abi</code></td>
+<td>off</td>
+<td>npm projects: accept a changed <code dir="auto">.jsc</code> ABI manifest</td>
+</tr>
+<tr>
+<td><code dir="auto">--accept-lock</code></td>
+<td>off</td>
+<td>npm projects: accept a library package change in <code dir="auto">joust.lock</code></td>
+</tr>
+<tr>
+<td><code dir="auto">--no-open</code></td>
+<td>off</td>
+<td>print a link instead of opening the browser</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="ports-links-and-security">Ports, links and security</h2><a class="sl-anchor-link" href="#ports-links-and-security"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Ports, links and security”</span></a></div>
+<p>The playground’s server listens on <code dir="auto">127.0.0.1</code> only; there is no option for another address. It answers only requests
+whose <code dir="auto">Host</code> is <code dir="auto">127.0.0.1:&lt;port&gt;</code> or <code dir="auto">localhost:&lt;port&gt;</code>, sends no CORS headers, and serves its API to the page’s
+own origin only.</p>
+<p>The server holds a session token in memory, and every request from the page must carry it. The page gets it by
+<strong>pairing</strong>: the link the command opens carries a single-use code, valid for ten minutes, which the page trades for
+the token once. The browser is opened through a private launcher file, so the code is in no command line, and the
+file is removed when the page pairs. With <code dir="auto">--no-open</code>, or when no browser can be opened, the command prints the link
+instead. Each link pairs one page; for another, run <code dir="auto">joust playground</code> again.</p>
+<p>A reload of a paired tab works (the tab keeps the token) and starts a new session. A new tab is not paired: it says
+“Not paired: this link was used already or expired.”</p>
+<p>The page renders every string from your project or the chain as text, under a strict Content-Security-Policy. The
+server never builds a transaction and never holds a key: the dev host prepares and the page signs.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="who-may-change-the-build-gradle">Who may change the build (Gradle)</h3><a class="sl-anchor-link" href="#who-may-change-the-build-gradle"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Who may change the build (Gradle)”</span></a></div>
+<p>The playground runs your build’s own <code dir="auto">./gradlew</code>, never a <code dir="auto">gradle</code> from <code dir="auto">PATH</code>. It refuses a build that another
+account could change: the directories from your project up to the one holding <code dir="auto">settings.gradle</code>, that file and
+<code dir="auto">gradlew</code> must be yours (or root’s) and not writable by group or others. A link in place of the settings file or the
+wrapper is refused too.</p>
+<p>On a system whose umask is <code dir="auto">002</code>, <code dir="auto">joust new</code> or <code dir="auto">git clone</code> leaves those paths group-writable. The playground then
+names every such path in one message and gives the command that fixes them all:</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#e6edf3;--1:#24292e">... are writable by others, so another account could change what Gradle runs. Fix (on a umask 002 system, say): chmod go-w '&lt;path&gt;' '&lt;path&gt;' ...</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="... are writable by others, so another account could change what Gradle runs. Fix (on a umask 002 system, say): chmod go-w &#x27;<path>&#x27; &#x27;<path>&#x27; ..."><div></div></button></div></figure></div>
+<p>Run that <code dir="auto">chmod</code> line. If you share the build directory on purpose, list it in <code dir="auto">JOUST_SAFE_DIRS</code> instead (absolute
+paths, separated by <code dir="auto">:</code>). Listing the build’s root exempts its settings file and wrapper; each directory below it on
+the way to your project is checked unless it is listed too.</p>
+<p>The playground’s cache (<code dir="auto">~/.joust/playground</code>) must be yours and private, and no directory above it may be writable
+by others unless it is sticky (like <code dir="auto">/tmp</code>). <code dir="auto">JOUST_PLAYGROUND_HOME</code> (an absolute path) moves the cache. npm checks
+each package it installs against the registry’s integrity hash and runs no install scripts.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="with-joust-dev">With <code dir="auto">joust dev</code></h3><a class="sl-anchor-link" href="#with-joust-dev"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “With joust dev”</span></a></div>
+<p>In an npm project on a DevKit network, <code dir="auto">joust dev</code> serves the playground too, at <code dir="auto">/playground/</code> beside your page. It
+prints a launcher link for it and renews the link after each use. That playground runs in DevKit mode with its own
+token, and rebuilds on save make its session stale as above. <code dir="auto">joust dev</code>’s other routes (<code dir="auto">/chain</code>, <code dir="auto">/dev/topup</code>)
+answer any origin; the playground’s do not.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="troubleshooting">Troubleshooting</h2><a class="sl-anchor-link" href="#troubleshooting"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Troubleshooting”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Message (shortened)</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">the Gradle playground needs Node.js 22+ (node on PATH)</code></td>
+<td>install Node.js 22 or newer</td>
+</tr>
+<tr>
+<td><code dir="auto">joust playground needs npm on PATH (it comes with Node.js)</code></td>
+<td>put <code dir="auto">npm</code> on <code dir="auto">PATH</code></td>
+</tr>
+<tr>
+<td><code dir="auto">… is a development build: there is no @julclang/joust of its version on npm</code></td>
+<td>use a released <code dir="auto">joust</code></td>
+</tr>
+<tr>
+<td><code dir="auto">… is writable by others, so another account could change what Gradle runs</code></td>
+<td>run the <code dir="auto">chmod go-w</code> line it prints, or use <code dir="auto">JOUST_SAFE_DIRS</code></td>
+</tr>
+<tr>
+<td><code dir="auto">… (above the playground's cache …) is writable by others and not sticky</code></td>
+<td>run the <code dir="auto">chmod go-w</code> it names, or set <code dir="auto">JOUST_PLAYGROUND_HOME</code></td>
+</tr>
+<tr>
+<td><code dir="auto">no executable Gradle wrapper at …</code></td>
+<td>add the Gradle wrapper to the build</td>
+</tr>
+<tr>
+<td><code dir="auto">build/joust/host-spec.json is missing: ./gradlew joustHostSpec writes it</code></td>
+<td>apply the <code dir="auto">org.julclang.joust</code> Gradle plugin</td>
+</tr>
+<tr>
+<td><code dir="auto">./gradlew build joustHostSpec failed</code>, with Gradle saying task <code dir="auto">'joustHostSpec' not found</code></td>
+<td>the build does not apply the <code dir="auto">org.julclang.joust</code> plugin: apply it (<a href="/apps/gradle-builds/">Gradle builds</a>)</td>
+</tr>
+<tr>
+<td><code dir="auto">the dev host needs JDK 25 or later</code></td>
+<td>set the project’s Java toolchain to 25</td>
+</tr>
+<tr>
+<td><code dir="auto">joust playground: the build failed</code></td>
+<td>read the build output above it; for an intended <code dir="auto">.jsc</code> change see <a href="#the-jsc-abi-and-the-lock">the ABI and the lock</a></td>
+</tr>
+<tr>
+<td><code dir="auto">the dev host reads build/joust; this project builds into …</code></td>
+<td>keep <code dir="auto">out</code> at <code dir="auto">build/joust</code></td>
+</tr>
+<tr>
+<td><code dir="auto">--network needs --mode devkit (offline uses no network)</code></td>
+<td>add <code dir="auto">--mode devkit</code>, or drop <code dir="auto">--network</code></td>
+</tr>
+<tr>
+<td><code dir="auto">… has no DevKit admin API. DevKit mode runs only on a Yaci DevKit</code></td>
+<td>use a DevKit network; public testnets are not supported</td>
+</tr>
+<tr>
+<td><code dir="auto">Yaci DevKit is not reachable (chain …, admin …)</code></td>
+<td>start it: <code dir="auto">yaci-devkit up --enable-yaci-store</code> in its own terminal</td>
+</tr>
+<tr>
+<td><code dir="auto">… reads the chain through ogmios; DevKit mode reads it through Yaci Store's API</code></td>
+<td>use the network’s Yaci Store <code dir="auto">chain</code></td>
+</tr>
+<tr>
+<td>No page opened</td>
+<td>run <code dir="auto">joust playground --no-open</code> and open the printed link</td>
+</tr>
+<tr>
+<td><code dir="auto">Not paired: this link was used already or expired</code></td>
+<td>run <code dir="auto">joust playground</code> again (or with <code dir="auto">--no-open</code>)</td>
+</tr>
+<tr>
+<td><code dir="auto">the project was rebuilt: start a new session to use the new build</code></td>
+<td>use the banner’s new-session buttons</td>
+</tr>
+<tr>
+<td><code dir="auto">not modelled offline: try DevKit (…)</code></td>
+<td>the offline ledger does not model this transaction: run <code dir="auto">--mode devkit</code></td>
+</tr>
+<tr>
+<td><code dir="auto">has no free lovelace-only output of at least 5 ADA to designate for a keyed call</code></td>
+<td><strong>+ identity</strong> or fund the signer, or let a pending keyed call settle</td>
+</tr>
+<tr>
+<td><code dir="auto">another playground (pid N) is using …: stop it first</code></td>
+<td>stop the other playground for this project and DevKit</td>
+</tr>
+<tr>
+<td><code dir="auto">… belongs to pid N, which is no longer running. If no playground is using it, remove the lock</code></td>
+<td>run the <code dir="auto">rm</code> line it prints</td>
+</tr>
+<tr>
+<td><code dir="auto">another tab took this DevKit session</code></td>
+<td>continue in the newer tab, or reload this one</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h2"><h2 id="limitations">Limitations</h2><a class="sl-anchor-link" href="#limitations"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Limitations”</span></a></div>
+<ul>
+<li><strong>DevKit only</strong> for networks: no public testnets, never mainnet.</li>
+<li><strong>Named views</strong> run only in Gradle projects (the JVM dev host).</li>
+<li><strong>Not every call can run.</strong> A contract with <code dir="auto">@Params</code> and a call with <code dir="auto">@AuthorizedBy</code> are shown disabled with the
+dev host’s code (<code dir="auto">params</code>, <code dir="auto">authorizedBy</code>). So are call kinds the page does not drive yet, and arguments of a type
+outside the form table. The page never works around one.</li>
+<li><strong>CIP-30 wallets</strong> cannot make keyed calls yet (“keyed calls from a connected wallet come later; use a test
+identity”; <a href="https://github.com/bloxbean/joust/issues/187">#187</a>), and cannot sign a <code dir="auto">@Quorum</code> call: its signer and
+co-signers are the page’s identities.</li>
+<li><strong>A reload starts a new session</strong>, with new identities. Four reloads can end every offline session the server
+keeps.</li>
+<li><strong>The review</strong> shows what the signer pays and receives, and lists the outputs, but does not yet label each output
+as the signer’s, the contract’s or someone else’s. Script budgets are not yet shown in the history.</li>
+<li><strong>Offline “outcome unknown”</strong> entries cannot be rechecked after <strong>New session, keep the ledger</strong>: check the state
+before you repeat the call.</li>
+<li><strong>The cache’s dependencies</strong> (Gradle) resolve on the day of the install, so two installs of the same version can
+differ in their transitive packages.</li>
+</ul>
+<p>Open follow-ups are tracked in the <a href="https://github.com/bloxbean/joust/issues?q=is%3Aissue+is%3Aopen+playground">JOUST issues</a>.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="next-steps">Next steps</h2><a class="sl-anchor-link" href="#next-steps"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Next steps”</span></a></div>
+<div class="card-grid astro-7qmvx3iy"><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/apps/dev-host/" class="astro-zaaezwya"><span class="title astro-zaaezwya">The dev host</span></a><span class="description astro-zaaezwya">The process that prepares every playground transaction.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/contracts/testing/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Testing</span></a><span class="description astro-zaaezwya">Turn what you tried by hand into tests.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/contracts/security-model/" class="astro-zaaezwya"><span class="title astro-zaaezwya">Security model</span></a><span class="description astro-zaaezwya">What the validator guarantees, and what the attack suite probes.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div><div class="sl-link-card astro-zaaezwya"><span class="sl-flex stack astro-zaaezwya"><a href="/reference/joust-cli/" class="astro-zaaezwya"><span class="title astro-zaaezwya">The joust CLI</span></a><span class="description astro-zaaezwya">Every command, flag and the offline ledger's rules.</span></span><svg aria-hidden="true" class="icon rtl:flip astro-zaaezwya astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.333em;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg></div></div></div><footer class="sl-flex astro-ddtxxk7k"><div class="meta sl-flex astro-ddtxxk7k"><a href="https://github.com/bloxbean/joust/edit/main/www/src/content/docs/apps/playground.mdx" class="sl-flex print:hidden astro-qlekgd3o"><svg aria-hidden="true" class="astro-qlekgd3o astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.2em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a></div><div class="pagination-links print:hidden astro-b5raizh3" dir="ltr"><a href="/apps/java-runtime/" rel="prev" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-b5raizh3">Previous<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">The Java off-chain runtime</span></span></a><a href="/apps/dev-host/" rel="next" class="astro-b5raizh3"><svg aria-hidden="true" class="astro-b5raizh3 astro-hkc32dio" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-b5raizh3">Next<br class="astro-b5raizh3"><span class="link-title astro-b5raizh3">The dev host</span></span></a></div></footer></div></div></main></div></div></div></div></body></html>

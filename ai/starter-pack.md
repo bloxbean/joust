@@ -37,8 +37,8 @@ This pack is written for machine ingestion. For people, start at [How JOUST work
 - Status: experimental, pre-release, not for production. Never guess a version: take the newest release whose tag
   starts with `v` on https://github.com/bloxbean/joust/releases (not the "Development snapshot" entry), or run
   `npm view @julclang/joust version`. JOUST's Maven modules, its Gradle plugin `org.julclang.joust` and the
-  JuLC they need are in `https://repo.bloxbean.org/maven/releases`; JOUST is not on Maven Central (JuLC's releases
-  are). The npm packages (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`)
+  JuLC they need are in `https://repo.bloxbean.org/maven/releases` (recent JOUST releases, and JuLC's, are on Maven
+  Central too); `joust new` writes a build that uses it. The npm packages (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`)
   are on npmjs.org (`npm create joust@latest`).
 
 ## 2. Project structures

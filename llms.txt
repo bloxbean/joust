@@ -22,7 +22,8 @@ Key facts an AI agent should know before generating JOUST code:
 
 - [Why JOUST](https://joust.julc.dev/start/why-joust/): The work a Cardano contract normally needs, what JOUST does instead, what it generates and checks for you, and where the project stands today.
 - [How JOUST works](https://joust.julc.dev/start/how-it-works/): The architecture end to end - the annotation processor, the generated validator and client, the runtime, an instance's life as UTxOs, storage strategies and the npm path.
-- [Quick start: Java & Gradle](https://joust.julc.dev/start/quick-start-java/): Run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
+- [Install JOUST](https://joust.julc.dev/start/install/): Install the joust command, pick your path (Java or .jsc with Gradle, or JavaScript with npm), set up Yaci DevKit, and check which JOUST version you have.
+- [Quick start: Java & Gradle](https://joust.julc.dev/start/quick-start-java/): Create a JOUST project with joust new, check its JOUST version, then build, test and run its Counter contract (Java or .jsc) on Yaci DevKit.
 - [Your first contract](https://joust.julc.dev/start/first-contract/): Build the counter step by step - state, @Init, actions with and without Ctx, @OnlyOwner, @View, @Destroy - then run it on Yaci DevKit from Java or JavaScript.
 - [Quick start: JavaScript & TypeScript](https://joust.julc.dev/start/quick-start-npm/): (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and call it from a Node script, a test and a browser page.
 
@@ -39,7 +40,7 @@ Key facts an AI agent should know before generating JOUST code:
 - [Staked vault and governance](https://joust.julc.dev/tutorials/staked-vault/): Run a council-governed vault whose funds earn staking rewards; delegate by quorum with @Certify, collect rewards with @Withdraw, and vote as a script DRep.
 - [Upgrading a contract](https://joust.julc.dev/tutorials/upgrades/): Migrate a live CounterV1 instance, with its count and funds, into CounterV2 in one composed transaction on Yaci DevKit.
 
-## Tutorials: JavaScript
+## Tutorials: JavaScript (experimental)
 
 - [A counter dApp in the browser](https://joust.julc.dev/tutorials/counter-dapp/): Build the template's Counter dApp end to end, from the Java contract to a page that prepares, checks and signs its own transactions.
 - [Deploy to preview](https://joust.julc.dev/tutorials/deploy-preview/): Take the Counter dApp from Yaci DevKit to Cardano's preview testnet, run it with Eternl or Lace, and ship the page as static files.
@@ -67,9 +68,15 @@ Key facts an AI agent should know before generating JOUST code:
 
 ## Building apps: Java
 
+- [Gradle builds](https://joust.julc.dev/apps/gradle-builds/): What the org.julclang.joust Gradle plugin adds, the build files joust new writes, how to set a build up by hand, and how to build against a JOUST checkout.
 - [Java off-chain runtime](https://joust.julc.dev/apps/java-runtime/): Use generated clients from Java - configure StateRuntime, deploy and call instances, read state and views, compose several calls in one transaction, and prepare transactions for browser wallets.
 
-## Building apps: JavaScript
+## Tools
+
+- [The playground](https://joust.julc.dev/apps/playground/): Try every contract of a project in a browser with joust playground - offline or on Yaci DevKit - and read what each run does and does not prove.
+- [The dev host](https://joust.julc.dev/apps/dev-host/): What JOUST's dev host is, when you meet it, and how a tool launches and drives it over stdio with protocol 1.
+
+## Building apps: JavaScript (experimental)
 
 - [JavaScript clients](https://joust.julc.dev/apps/javascript-clients/): Call JOUST contracts from JavaScript - generated clients, JoustContract, joustRuntime in Node, prepare services, the page verifier and JSON conventions.
 - [Wallets](https://joust.julc.dev/apps/wallets/): Connect CIP-30 browser wallets such as Eternl and Lace, review and sign JOUST transactions, use the DevKit dev wallet, and know what a wallet risks.
@@ -94,7 +101,7 @@ Key facts an AI agent should know before generating JOUST code:
 - [State API (julc-state-api)](https://joust.julc.dev/reference/state-api/): Every class of julc-state-api besides the annotations, with exact signatures: Ctx, Require, Clock, Payouts, Funds, Assets, MerkleMaps and more.
 - [Java runtime API](https://joust.julc.dev/reference/java-runtime-api/): Every public class of julc-state-runtime and julc-state-server, with signatures, builder options and defaults, read from the sources.
 
-## Reference: JavaScript
+## Reference: JavaScript (experimental)
 
 - [@julclang/state-client](https://joust.julc.dev/reference/state-client/): API reference of @julclang/state-client - clients, services, chain providers, wallets, verifiers, data codecs, ledger helpers and joust-gen.
 - [@julclang/joust-runtime](https://joust.julc.dev/reference/joust-runtime/): API reference of @julclang/joust-runtime - joustRuntime and its options, engineService, the page worker and engineWorker, mirrors, snapshots and DevKit helpers.
