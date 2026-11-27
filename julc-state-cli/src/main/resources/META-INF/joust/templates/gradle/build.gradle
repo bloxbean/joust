@@ -1,6 +1,6 @@
 plugins {
     id 'application'
-    // JOUST @@version@@: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+    // JOUST @@version@@: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings.
     // Upgrading JOUST is this version.
     id 'org.julclang.joust' version '@@version@@'
 }

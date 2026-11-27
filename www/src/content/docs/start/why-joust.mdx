@@ -126,9 +126,8 @@ For each `@StateContract` class, the JOUST annotation processor generates:
 - **A description** (`META-INF/joust/<package>.<Name>.json`): a CIP-57 schema plus JOUST metadata, from which
   JavaScript clients are generated.
 
-The generated validator enforces the invariants of
-[ADR-0001 §4](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md),
-whatever your methods do:
+The generated validator enforces these invariants ([Security model](/contracts/security-model/)), whatever your
+methods do:
 
 | ID | The validator enforces |
 |---|---|

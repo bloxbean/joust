@@ -11,7 +11,8 @@ Two readers, often the same person on different days:
   run, and the next step. Explain each Cardano term once, where it is first needed (UTxO, datum, redeemer, minting
   policy, reference script, CIP-30), and link to the glossary.
 - **Advanced users**: building real apps. They need precise rules, limits, exact signatures and the reason behind
-  each design choice. Link to the ADR (`docs/adr/` in the repo) for the full argument.
+  each design choice. Explain the reason in the page itself; for the full argument, link to
+  [Architecture decisions](/project/architecture-decisions/).
 
 ## Voice
 
@@ -31,9 +32,11 @@ Two readers, often the same person on different days:
   generic records, immutable locals (loop accumulators aside), `Require.that(cond, "msg")`, `byte[]` compared with
   `ByteStringLib.equals` (never `==` or `.equals`). See `CLAUDE.md` (Gotchas) and `julc-state-api`.
 - Cite the source when it helps an advanced reader: `julc-state-api/src/main/java/org/julclang/state/api/Ctx.java`,
-  `examples/token/...`, ADR-0002 §D9. Link to GitHub: `https://github.com/bloxbean/joust/blob/main/<path>`.
+  `examples/token/...`. Link to GitHub: `https://github.com/bloxbean/joust/blob/main/<path>`.
 - No JOUST, JuLC or cardano-client-lib version numbers in pages: link to the releases page or write `<version>` (see
   **Versions** below; the build enforces it).
+- **No ADR numbers in pages** (no `ADR-0022`, no `D3` or `I4`): readers do not know them. Say what the decision
+  is instead. Only the Architecture decisions page names ADRs.
 - Numbers (script sizes, budgets, fees) only from the repository (examples/README.md tables, ADRs), with the
   context they were measured in.
 
@@ -54,11 +57,14 @@ Two readers, often the same person on different days:
   it fails on any other prerelease version literal (`<major>.<minor>.<patch>-pre<n>...`) under `src/`, and on final
   versions in the shapes pages use (`create-joust@1.2.3`, `@julclang/joust@1.2.3`, `joustVersion=1.2.3`,
   `version '1.2.3'`, `org.julclang:julc-state-api:1.2.3`), and prints how many markers it honoured.
+- **Getting started goes through `joust`:** pages tell a new reader to install the `joust` command and run `joust new`
+  (or `npm create joust@latest` on the npm path), then to check the project's JOUST version against the releases page.
+  A JOUST checkout (`git clone`) is for running the examples or building unreleased code, never the first step.
 - **Java path:** JDK 25 and Gradle. JOUST's releases (pre-releases so far) are in the BloxBean release repository,
-  `https://repo.bloxbean.org/maven/releases`, with the JuLC they need; nothing is on Maven Central yet. `joust new`
+  `https://repo.bloxbean.org/maven/releases`, with the JuLC they need (recent releases are on Maven Central too). `joust new`
   (the native `joust`, from Homebrew `bloxbean/tap/joust` or a release's archives) writes a project whose
   `build.gradle` applies the Gradle plugin `org.julclang.joust`, which adds every dependency at matching versions.
-  Dependencies by hand: see the [Java quick start](/start/quick-start-java/) and any `examples/<name>/build.gradle`.
+  Dependencies by hand: see [Gradle builds](/apps/gradle-builds/) and any `examples/<name>/build.gradle`.
 - **npm path (experimental):** Node 22 or newer, no JDK, no GraalVM. The npm packages (`@julclang/joust`,
   `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are on npmjs.org:
   `npm create joust@latest my-app`. They run JOUST's toolchain and runtime as Wasm built with GraalVM Web Image, itself experimental: say so in
@@ -98,7 +104,7 @@ Opening paragraph: what this is and when you need it.
 - **Tutorials** use `<Steps>` for the ordered parts, end with a working result the reader can see, and say what each
   step taught. Build on a real example in `examples/`.
 - **Guides** explain one feature fully: what, when, how (with code), the rules and limits, what is generated and
-  checked on chain, pitfalls, and links to the reference and the ADR.
+  checked on chain, pitfalls, and links to the reference.
 - **Reference** pages are exhaustive and scannable: tables of every element, option and default, from the source.
 - Tables for comparisons and options; `Aside` (note, tip, caution, danger) for anything a reader must not miss.
 

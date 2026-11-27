@@ -1,5 +1,8 @@
 ---
 title: Your first contract
+next:
+  link: /tutorials/vault/
+  label: 'Vault: deposits, time and payouts'
 description: Build the counter step by step - state, @Init, actions with and without Ctx, @OnlyOwner, @View, @Destroy - then run it on Yaci DevKit from Java or JavaScript.
 ---
 
@@ -10,8 +13,9 @@ In this tutorial you build the contract from
 that only its owner can reset or close. It is small, but it uses every basic part of a JOUST contract, and by the end
 you will have created, changed and closed one on a local Cardano network.
 
-You need a working setup from [Quick start: Java & Gradle](/start/quick-start-java/) (or a JOUST checkout with JuLC
-built), and Yaci DevKit for the last part. Each Cardano term is explained the first time it comes up; the
+You need a project from [Quick start: Java & Gradle](/start/quick-start-java/) (`joust new`), and Yaci DevKit for the
+last part. Your project already has the whole contract in `src/main/java/app/Counter.java`: open it and follow along,
+since the steps below build it up a piece at a time (imports left out). Each Cardano term is explained the first time it comes up; the
 [Glossary](/reference/glossary/) has them all.
 
 ## Build the contract
@@ -230,7 +234,7 @@ which you commit beside the file. See [.jsc](/languages/jsc/).
 ## Build it
 
 ```sh
-./gradlew :examples:counter:build      # in a JOUST checkout; ./gradlew build in your own project
+./gradlew build                        # in a project from joust new; in a JOUST checkout: ./gradlew :examples:counter:build
 ```
 
 The processor writes `CounterValidator` and `CounterClient` into
@@ -252,61 +256,62 @@ static boolean onReset(Reset r, Counter.State current, TxInfo tx, TxInInfo own, 
 
 ## Run it
 
-Start Yaci DevKit (`yaci-devkit up --enable-yaci-store`), then drive the counter from an application.
+Start Yaci DevKit (`yaci-devkit up --enable-yaci-store`, in a terminal of its own), then drive the counter from an
+application.
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
 
-```java title="examples/counter/.../CounterApp.java"
-var runtime = DevKit.runtime();
-var alice = DevKit.fundedAccount(500);
-var bob = DevKit.fundedAccount(500);
+In a project from `joust new`, `CounterMain` drives the counter (`src/main/java/app/CounterMain.java`):
+
+```java title="src/main/java/app/CounterMain.java"
+var runtime = Devnet.runtime();
+var alice = Devnet.fundedAccount(500);
+var bob = Devnet.fundedAccount(500);
 
 CounterClient counter = CounterClient.deploy(runtime, alice);
-System.out.println("deployed instance " + counter.instanceId() + " at "
-        + CounterClient.contract(runtime).address());
-System.out.println("count = " + counter.count());
+System.out.println("deployed instance " + counter.instanceId());
 
 counter.increment(bob, BigInteger.valueOf(5));
 counter.increment(alice, BigInteger.TWO);
+System.out.println("count = " + counter.count());               // 7
 
 try {
-    counter.reset(bob);   // not the owner: rejected on the JVM, nothing is submitted
+    counter.reset(bob);                                         // not the owner
 } catch (RequireException e) {
-    System.out.println("bob reset rejected off-chain: " + e.getMessage());
+    System.out.println("refused before submitting: " + e.getMessage());
 }
 
-counter.reset(alice);
-var closed = counter.close(alice);
-System.out.println("alice closed the counter in " + closed.txHash() + ", paid back " + closed.payouts());
+var closed = counter.close(alice);                              // the deposit goes back to alice
+System.out.println("closed in " + closed.txHash());
 ```
 
 ```sh
-./gradlew :examples:counter:run
+./gradlew run
 ```
 
 ```text
-deployed instance d11c40ff686bcc687c6dffb98efd9b25c597c8377df049f12117ca5747b455a9 at addr_test1wptj8x0692g2q3fv8v5a5j90dwgfqkkge76s8cd0sq7fgtq9nldys
-count = 0
-bob +5   -> count = 5
-alice +2 -> count = 7
-bob reset rejected off-chain: Counter.reset: must be called by the key in 'owner'
-alice reset -> count = 0
-alice closed the counter in c4419d0b..., paid back [Payout[to=[B@78d39a69, lovelace=2200000]]
+deployed instance d11c40ff…
+count = 7
+refused before submitting: Counter.reset: must be called by the key in 'owner'
+closed in c4419d0b…
 ```
 
-`DevKit` is the examples' helper for a local network: it builds the `StateRuntime` and funds fresh accounts from
-the faucet. In your own project you build the runtime yourself, as in the
-[quick start](/start/quick-start-java/#run-it-on-devkit).
+(The runtime's own `[joust]` log lines are left out, and hashes are shortened.) `Devnet` builds the `StateRuntime` for
+DevKit and funds fresh accounts from its faucet: [the quick start](/start/quick-start-java/#the-devkit-app) shows it.
+In a JOUST checkout, `./gradlew :examples:counter:run` runs the examples' `CounterApp`, which does the same with the
+examples' `DevKit` helper.
 
 </TabItem>
 <TabItem label="JavaScript">
 
+**Experimental:** the npm path runs JOUST as WebAssembly; Java is the supported path.
+
 The project that `npm create joust` makes contains the same counter, in `.jsc` (`contracts/app/Counter.jsc`; with
 `-- --lang java`, `contracts/app/Counter.java`). After
-`npm run build` and `npm run deploy`, its test drives it on DevKit from Node:
+`npm run build` and `npm run deploy`, its DevKit test drives it from Node:
 
-```js title="test/counter.test.js (create-joust template)"
+```js title="test/devkit/counter.test.js (create-joust template)"
 const rt = joustRuntime({ chainUrl: deployed.chain, contracts, clock: deployed.clock, networkId: deployed.networkId,
   deployments: deployed.contracts, ttlMs: 20_000 });
 // A fresh DevKit wallet with 100 ADA from the faucet.
@@ -335,8 +340,8 @@ What happened on chain, call by call:
 |---|---|
 | `deploy` | Spends a seed UTxO of Alice, mints the thread token, creates the state UTxO (datum `State(0, alice)`, 2.2 ADA). The first deploy on a network also publishes the script once as a **reference script**, a UTxO other transactions read the script from instead of carrying it |
 | `increment(bob, 5)` | Spends the state UTxO with redeemer `Increment(5)`, creates the next one with datum `State(5, alice)` |
+| `increment(alice, 2)` | The same, with datum `State(7, alice)` |
 | `reset(bob)` | Never built: the client saw Bob is not the owner |
-| `reset(alice)` | Spends the state, signed by Alice, datum `State(0, alice)` |
 | `close(alice)` | Spends the state, burns the thread token, pays 2,200,000 lovelace to Alice in an output tagged with the state input |
 
 After `close`, `counter.state()` throws `InstanceNotFoundException`: no UTxO holds the token any more.

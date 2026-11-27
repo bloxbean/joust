@@ -1,0 +1,546 @@
+---
+title: The playground
+description: Try every contract of a project in a browser with joust playground - offline or on Yaci DevKit - and read what each run does and does not prove.
+---
+
+import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import startShot from '../../../assets/playground/playground-start.webp';
+
+`joust playground` builds your project and opens a page in your browser where you can call every contract it
+contains. You do not write a client or a page first. The page lists your contracts, gives you three test
+identities (Alice, Bob and Carol), and draws a form for each call. Each transaction is checked by the page and shown
+to you before an identity signs it. By default it runs offline, on an in-memory ledger, so you need no network.
+
+Behind the page, a small process called the [dev host](/apps/dev-host/) runs your project's own JOUST to prepare each
+transaction. The page checks what the dev host prepared, you review it, and an identity signs it.
+
+Use it after a quick start, to try a contract by hand, to see a refusal for yourself, or to replay a scenario after
+a change.
+
+<Aside type="caution" title="Experimental">
+JOUST is pre-release software. The playground runs on JOUST's npm packages, in Gradle projects too, and its offline
+ledger evaluates scripts with the runtime engine, which is WebAssembly built with GraalVM Web Image. Both are
+experimental.
+</Aside>
+
+## Start it
+
+You need **Node.js 22 or newer** on both paths. Run the command in your project's directory.
+
+<Tabs>
+<TabItem label="Gradle project">
+
+```sh
+joust playground
+```
+
+This is the native `joust` ([Install JOUST](/start/install/)). It does not run a copy of the playground from your
+project. The first time, it installs the `@julclang/joust` package of its own version into a per-user cache,
+`~/.joust/playground/<version>`, with npm. Later runs reuse the cache. `node` (22 or newer) and `npm` must be on
+`PATH` every time; npm installs only the first time. Then it runs `./gradlew build joustHostSpec` with your build's
+own wrapper.
+
+```txt
+joust playground: installing @julclang/joust <version> into <home>/.joust/playground/<version> (once)
+joust playground: ./gradlew build joustHostSpec (in <project>)
+  gradle: ...
+joust playground (offline, Gradle): http://127.0.0.1:<port>/ (opened in your browser)
+  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link
+  Ctrl-C stops the playground.
+```
+
+The project needs the Gradle plugin `org.julclang.joust`, which `joust new` applies. A build that adds JOUST's
+dependencies by hand has no `joustHostSpec` task ([Gradle builds](/apps/gradle-builds/)).
+
+</TabItem>
+<TabItem label="npm project">
+
+```sh
+npx joust playground
+```
+
+This runs your project's own `@julclang/joust` (run `npm install` first). The native `joust playground` does the same
+in an npm project: it hands over to the project's copy. The template has no `playground` script; add
+`"playground": "joust playground"` to `package.json` if you want `npm run playground`.
+
+It builds first, as `joust build` does, then starts the playground:
+
+```txt
+...
+joust playground (offline): http://127.0.0.1:<port>/ (opened in your browser)
+  no page? (a sandboxed browser may not read the launcher file) run joust playground --no-open for a link
+  Ctrl-C stops the playground.
+```
+
+The playground reads the build from `build/joust`. A project whose `out` in `joust.config.json` is another folder is
+refused.
+
+</TabItem>
+</Tabs>
+
+The browser opens the page. **Ctrl-C** in the terminal stops the playground.
+
+## Your first five minutes
+
+<a href={startShot.src} title="Open the full-size image"><img src={startShot.src} width={startShot.width} height={startShot.height} alt="The playground on first load: the OFFLINE banner, the identities Alice, Bob and Carol, the Counter contract with its operations, and the empty History and Log" /></a>
+
+*The whole page on first load (open the image for full size).*
+
+The page has three columns. On the left: **Identities** (who signs) and **Contracts** (this project's build). In the
+middle: the chosen contract's **Instances** (with their state), its **Views**, and its **Operations**, one card per
+call. On the right: **History** (newest first) and **Log**. The banner at the top says the mode (**OFFLINE** or
+**DEVKIT**), the current slot and the build's fingerprint.
+
+With the Counter from either quick start ([Java](/start/quick-start-java/), or
+[JavaScript](/start/quick-start-npm/), where it is a `.jsc` contract):
+
+<Steps>
+
+1. **Pick the contract.** Click `Counter` under **Contracts**. Its operations appear as cards: `init`, `increment`,
+   `reset` and `close`. Alice is the signer: her row has the **SIGNS** tag, and the **Operations** panel says "Signing as
+   Alice".
+
+2. **Create an instance.** Click **Review…** on the `init` card. The first call to a contract publishes what it needs
+   first (here, its reference script), so you see a **Review publication** dialog before the call's own **Review: init**
+   dialog. Check each one and click **Approve and sign as Alice**. The new instance appears under **Instances** with
+   its state, marked **SELECTED**.
+
+3. **Call an action.** Type `5` into `by` on the `increment` card and click **Review…**. The dialog shows the state
+   before and after. Approve it. The instance's state now shows the count 5.
+
+4. **See a refusal.** Choose Bob under **Identities** and click **Review…** on `reset`. `reset` is owner-only, so the
+   dev host refuses it before anything is signed. The history shows "Bob: reset failed at stage host".
+
+5. **Decline one.** As Alice, start another `increment` and click **Decline**. Nothing is signed or sent, and the
+   history shows "declined".
+
+</Steps>
+
+![After the steps: the counter's state shows count 5, and the History shows Bob's reset refused at stage host above Alice's confirmed calls, each with its attack-suite result](../../../assets/playground/playground-state.webp)
+
+That loop (pick, fill in, review, approve) is all there is to every call. The rest of this page is the detail.
+
+## What the page shows
+
+### Identities
+
+Offline, Alice, Bob and Carol are fresh keys made in the page. Their keys stay in the page's memory: they are never
+sent to the server, stored or exported. The server only learns their addresses, and funds each with 1,000 ADA on the
+offline ledger. **+ identity** adds another (Dave, Erin, and so on), funded the same way.
+
+The radio button beside an identity picks the signer. A form field that holds a key hash (a field whose name contains
+`hash`, `key`, `owner`, `caller`, `signer` or `pkh`) offers "an identity's key hash…", so you can fill in Bob's key
+hash without copying it.
+
+A reload of the page loses the keys. It starts a new session with new identities.
+
+### Forms
+
+Each call's form is generated from its argument types in the contract's description:
+
+| Argument type | Control |
+|---|---|
+| integer | a text field, read as a big integer |
+| bytes | hex, with a "text (UTF-8) → hex" helper; key hash fields also offer an identity's key hash |
+| `Bool` | a checkbox |
+| `Optional` | a "some" checkbox and the inner control |
+| a record or sealed type | a variant selector (for a sum type) and a control per field |
+| list | **+ item** rows of the inner control |
+| map | **+ item** rows of key and value (keys must be integers or bytes) |
+| `Value` | **+ asset** rows of policy, name and quantity |
+
+A `@Payable` call has a **pay (lovelace)** field, and a call that takes assets has a **pay (assets)** field (one
+`<policy hex>.<asset name hex> <quantity>` per line). An owned-object call asks for the object id, and a keyed call
+for the key, both in hex. Any other type (untyped Plutus data, say) is shown as **UNSUPPORTED** with the field's path,
+and the call cannot run. The page never guesses an encoding.
+
+A value the form cannot read (`1.5` for an integer, say) fails at stage `arguments` before anything is sent.
+
+### Instances, state and views
+
+**Instances** lists every instance of the contract on the ledger, with its current state. Click one to select it: an
+action needs a selected instance ("choose an instance first"). A contract with owned objects lists the selected
+instance's **Owned objects** below it.
+
+**Views** runs a contract's named `@View` methods: fill in the arguments and click **Run view**. A view signs
+nothing. Named views run only on the JVM dev host, so only in Gradle projects. In an npm project the page says that
+views are not available there; the instance's state is still shown.
+
+### The review dialog
+
+Before any identity signs, the page shows a review dialog. Everything in it is read from the transaction body and
+the chain, not from what the dev host claims:
+
+![The review dialog for init: signer, transaction id, fee, what Alice pays in all, validity, signers, scripts run, outputs, the state before and after, and the Decline and Approve and sign as Alice buttons](../../../assets/playground/playground-review.webp)
+
+| Row | What it shows |
+|---|---|
+| signer, co-signers | who signs, with key hashes |
+| transaction | the transaction hash |
+| fee | the fee in ADA |
+| `<signer>, in all` | what the signer pays and receives, net |
+| validity | the validity window in slots, and the current slot |
+| signers | the required signers |
+| scripts run | the number of redeemers, one per script the transaction runs |
+| outputs | each output's address and ADA, the number of other assets it holds, and whether it has a datum |
+
+Below the table, **Before (on the chain)** and **After (in this transaction)** show the state change ("none: a
+creation", "removed: a destroy"). The dev host's own prediction is folded away under "The dev host's prediction
+(unchecked, not used to decide)".
+
+**Approve and sign as `<name>`** signs; **Decline** (or Escape) discards the body, and its inputs are free again. The
+dialog opens with the focus on its title, so a key press cannot approve it before you have seen it.
+
+### The check before signing
+
+A call goes through these stages, and a failure names its stage in the history and the log:
+
+| Stage | What happens |
+|---|---|
+| `arguments` | the form's values are read |
+| `host` | the dev host prepares the transaction; a contract's `Require` refusal stops here |
+| `verification` | the page checks the body |
+| `wallet` | the identity signs (or you decline) |
+| `ledger` | the transaction is submitted: the offline ledger's rule, or the node's error |
+| `confirmation` | DevKit only: the transaction is included, then final |
+
+At stage `verification` the page checks the body with `@julclang/state-client`. A call runs two independent checks:
+the dev host protocol's reference checker (`verifyHostResult`) and then the page verifier (`verifyPrepared`). A keyed
+call runs only the reference checker, which holds the keyed rules. A publication runs the reference checker and then
+`verifyPublication`. The contract's script hash and address come from the build the session pinned, never from the
+dev host. The fee must be at most 5 ADA. If a check finds a problem, the page refuses to sign ("the page refused to
+sign: …"). When you open a contract, the page
+also compares the dev host's deployment with the pinned build, and refuses a mismatch.
+
+### History, log and the attack suite
+
+**History** lists every call with its outcome: confirmed, declined, or failed at a stage with its code and message.
+A `.jsc` contract's refusal also names its source site. If a submission's answer is lost, the entry says "outcome
+unknown" with a **recheck** button: check it before you try the call again.
+
+Offline, the ledger runs the **attack suite** on every transaction that runs a script. It mutates the transaction (the
+state datum replaced or hashed, one lovelace skimmed, token dust added, the output sent to a key address or given a
+stake credential, the output dropped, the required signer replaced, the validity bounds moved or removed) and checks
+that the scripts refuse each mutation. The history shows "attacks run: N; accepted by the scripts: M". An accepted
+attack is a warning in the log ("the scripts ACCEPTED the attack …") and means your validator lets something through
+that it should not. The checkbox **attack suite on every script transaction** in the banner turns it off for the
+session.
+
+**Log** has one line per event, prefixed with the slot.
+
+## Offline and DevKit
+
+The banner says which mode a session runs in. Each mode proves different things.
+
+| | Offline (default) | DevKit (`--mode devkit`) |
+|---|---|---|
+| Chain | an in-memory ledger in the playground | your Yaci DevKit, read through Yaci Store |
+| Network | none: it makes no network request | DevKit's node |
+| Who decides | the ledger's modelled phase-1 rules, and the scripts under JuLC's VM | the node's ledger rules and the scripts |
+| Attack suite | on, with a toggle | none |
+| Time | **Advance time (s)** moves the ledger's clock | the network's own; it cannot be advanced |
+| Settlement | at once | submitted, then included in a block, then final 10 slots later |
+| Identities | fresh keys, funded from nowhere | DevKit's public test mnemonic, topped up from the faucet |
+| CIP-30 wallets | no | **Connect wallet** |
+| Scenarios | export and import | not offered |
+
+### Offline
+
+Offline success means: the dev host built the transaction with your project's own JOUST, the page's checks passed,
+the in-memory ledger's modelled phase-1 rules passed, and the scripts accepted it under JuLC's VM. It is not a node's
+acceptance and not a proof. The banner says so, and its fold "What the offline ledger checks, refuses and does not
+model" lists the rules. They are the rules of `@julclang/joust/test`'s ledger ([offline
+tests](/reference/joust-cli/#offline-tests)):
+
+- **Checks**, under the node's error names: validity tag, size, inputs, validity interval, withdrawals, value
+  conservation, minimum ADA, maximum value size, network ids, auxiliary-data hash, fee, witnesses, redeemers, datums,
+  collateral, script integrity hash, execution units, stake registration and deregistration.
+- **Refuses** as "not modelled offline: try DevKit": votes, proposals, treasury donations and values, every certificate
+  but stake registration and deregistration, and invalid-tagged transactions. Such a refusal is not a contract
+  failure.
+- **Does not model**: rewards (withdrawals take 0), PlutusV1's integrity hash, collateral loss on a failing script,
+  rollbacks.
+
+The offline network has network id 0. A transaction's validity window is 120 slots (one slot is one second).
+**Advance time (s)** moves the clock by the seconds you type, which is how you test a `@ValidAfter` deadline or a
+`Clock` check.
+
+The offline banner also has **Reset ledger**: a new ledger and a new dev host, with the same identities funded again
+and the history cleared.
+
+### DevKit
+
+Start DevKit first, in a terminal of its own ([Install JOUST](/start/install/) shows how to install it):
+
+```sh
+npm install -g @bloxbean/yaci-devkit     # once
+yaci-devkit up --enable-yaci-store       # leave it running
+```
+
+Then, in your project:
+
+```sh
+joust playground --mode devkit
+```
+
+DevKit mode attaches to the project's development network as `joust dev` does. In an npm project that is
+`joust.config.json`'s `network` (default `devkit`), or the one `--network <name>` names. A Gradle project uses the
+built-in `devkit` network: Yaci Store at `http://localhost:8080/api/v1` and its admin API at `http://localhost:10000`.
+If the network does not answer and its config entry has a `start` command, the playground runs it and waits.
+
+Only a Yaci DevKit is accepted: the network must have an admin API and network id 0, and the chain is read through
+Yaci Store's API (an `ogmios` provider is refused). The playground never runs on mainnet, and public testnets are not
+supported. Before it does anything it checks that Yaci Store serves the same chain as the admin API.
+
+Transactions go to DevKit's node. The history shows each one as submitted, then "included in slot N", then final;
+state is refreshed only after inclusion. A transaction that is never included is shown as expired or not confirmed,
+never as confirmed.
+
+The test identities are labelled **test-only**: "Alice (DevKit #1)" and so on. They are accounts of DevKit's public
+test mnemonic, derived in the page, so anyone can derive their keys. Never use them with real funds. When an identity
+holds less than 100 ADA, the playground tops it up with 1,000 ADA from the DevKit faucet.
+
+Two options in `joust.config.json` tune DevKit mode in an npm project:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `playground.ttlMs` | 60 000 | the validity window asked for each transaction, in ms (capped by DevKit's stability window) |
+| `playground.identityBase` | 1 | the account index of the first test identity in DevKit's mnemonic |
+
+The DevKit banner has **Refresh** and **New session**. A playground server keeps one DevKit session: a second tab
+that starts one closes the first ("another tab took this DevKit session: this one is closed").
+
+#### Connect wallet (CIP-30)
+
+In DevKit mode, **Connect wallet (CIP-30)** under the identities lists the browser wallets the page finds, Yano
+first. Pick one and click **Connect**. The page refuses a wallet that is not on network id 0. Network id 0 does not
+tell DevKit from a public testnet, so point the wallet at this DevKit: a wallet that follows another chain fails later,
+when the dev host prepares the call or when the page reads the wallet again before it signs. A connected wallet becomes an identity (tagged **CIP-30**) and the signer, and it is topped up from the
+faucet like the test identities. The page's checks and review are the same; then the wallet signs.
+
+Just before the wallet signs, the page reads it again: same network, same change address, and every input the body
+spends from the wallet must be one the wallet holds and DevKit shows unspent. Once a body has gone to a wallet, it is
+never discarded: if it does not land, its inputs are released when it expires.
+
+#### The journal
+
+On DevKit the playground keeps a journal of every transaction body it has handed out for signing, until that body is
+final or expired. It lives in a per-user state directory, `~/.joust/state` (`JOUST_STATE_DIR` moves it), never in the
+project. It is kept per project and per chain. A chain is identified by its network id, protocol magic and genesis
+start time, so a reset DevKit is a new chain with an empty journal. The journal of an earlier chain is removed, and
+the log says so.
+
+When you start the playground again, the new session restores the journal ("N journaled transaction(s) restored")
+and follows those transactions to their end. Only one playground at a time can use a project's journal on one DevKit.
+If DevKit's chain goes back below transactions that had already settled, the session builds nothing until the chain
+passes that point again.
+
+## Rebuilds and new sessions
+
+A **session** is one mode, one chain, one build and one dev host process. The session pins the build it started with:
+the dev host runs a private, verified copy of it, so a rebuild does not change a running session.
+
+When you rebuild, the banner says "The project was rebuilt." and the session prepares nothing more. Start a new
+session from the banner:
+
+- Offline: **New session, keep the ledger** keeps the balances and outputs. An instance of a contract whose script
+  changed stays at the old script's address. **New session, empty ledger** starts again.
+- DevKit: **New session on the new build**.
+
+<Tabs>
+<TabItem label="Gradle project">
+
+Rebuild with `./gradlew build`. The new session runs `./gradlew build joustHostSpec` again, with its gates, and pins
+the new build. The playground copies the build into a private snapshot in the system's temporary directory, checks
+every file's hash, and runs the JVM dev host on the copy. The copy is deleted when the dev host exits.
+
+</TabItem>
+<TabItem label="npm project">
+
+Rebuild with `npx joust build` in another terminal. The new session pins whatever `build/joust` holds then; it does
+not build.
+
+</TabItem>
+</Tabs>
+
+Offline, a server keeps at most four sessions; when a fifth starts, the least recently used one ends.
+
+## Scenarios
+
+Offline, the banner has **Export scenario** and **Import scenario**.
+
+**Export scenario** downloads `scenario.json`: the session's calls in order, each with its identity's label, its
+arguments and its outcome, plus every time advance and the ledger's clock. It holds no key, mnemonic or transaction
+bytes. Identities are labels, and values that were an identity's key hash or address, or an instance a step created,
+are written as references.
+
+**Import scenario** replays a scenario in a fresh offline session with new identities, one per label. Each step runs
+through the same checks (without the review dialog) and the log says whether its outcome matched: "scenario
+replayed: N of M call(s) with the same outcome". The scenario's clock is used, so a deadline in it means what it
+meant. A scenario from another build is allowed, with a warning that names the contracts whose scripts differ.
+
+Limits: a scenario is at most 1 MiB, 16 identities and 500 steps. A session that kept an earlier ledger cannot be
+exported.
+
+## Special calls
+
+- **`@Quorum` calls** show a **co-signers** field: tick the identities that co-sign. Each one approves and signs the
+  same checked body. The signer and co-signers are the page's identities, not a connected wallet.
+- **Keyed calls** ([keyed objects](/contracts/keyed-objects/)) each spend a designated input: an ordinary output of
+  the signer, of at least 5 ADA and holding only ADA. The page records the operation before it asks for the first
+  body. **Pending keyed operations** under the identities lists them, with **Release**, **Acknowledge** or **Done**
+  buttons where the outcome needs you. One keyed call is in flight at a time. On DevKit the records are kept in the
+  journal, so they survive a reload, and a retry after a reload never makes a second instance. Offline, the records
+  belong to the session's ledger.
+- **Sends and MerkleMaps** need JOUST's shared verifiers; the page takes them from the pinned build and checks their
+  claims.
+
+## The `.jsc` ABI and the lock
+
+The playground builds through the same gates as a normal build. It never accepts a changed `.jsc` interface or library
+lock unless you say so.
+
+<Tabs>
+<TabItem label="Gradle project">
+
+`./gradlew build` runs `checkJscAbi` and the lock check, so a changed `.jsc` interface fails the playground's build.
+Accept an intended change with Gradle and commit it:
+
+```sh
+./gradlew acceptJscAbi
+./gradlew acceptJoustLock
+```
+
+`--accept-abi` and `--accept-lock` are refused in a Gradle project: "in a Gradle build, accept an ABI or lock change
+with ./gradlew acceptJscAbi or ./gradlew acceptJoustLock (and commit it); the playground never accepts one".
+
+</TabItem>
+<TabItem label="npm project">
+
+A changed [ABI manifest](/languages/jsc/#the-abi-manifest) or an unpinned [library
+package](/languages/jsc-reference/#library-packages-and-joustlock) fails the build, as in `joust build`. Accept an
+intended change with the flag, then review and commit the file it writes:
+
+```sh
+npx joust playground --accept-abi
+npx joust playground --accept-lock
+```
+
+</TabItem>
+</Tabs>
+
+## Flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--mode offline\|devkit` | `offline` | the chain: the in-memory ledger, or Yaci DevKit |
+| `--network <name>` | npm: the config's `network`; Gradle: `devkit` | DevKit mode's network; refused offline. A Gradle project accepts only `devkit` |
+| `--port <port>` | a free port | the port the server listens on |
+| `--accept-abi` | off | npm projects: accept a changed `.jsc` ABI manifest |
+| `--accept-lock` | off | npm projects: accept a library package change in `joust.lock` |
+| `--no-open` | off | print a link instead of opening the browser |
+
+## Ports, links and security
+
+The playground's server listens on `127.0.0.1` only; there is no option for another address. It answers only requests
+whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`, sends no CORS headers, and serves its API to the page's
+own origin only.
+
+The server holds a session token in memory, and every request from the page must carry it. The page gets it by
+**pairing**: the link the command opens carries a single-use code, valid for ten minutes, which the page trades for
+the token once. The browser is opened through a private launcher file, so the code is in no command line, and the
+file is removed when the page pairs. With `--no-open`, or when no browser can be opened, the command prints the link
+instead. Each link pairs one page; for another, run `joust playground` again.
+
+A reload of a paired tab works (the tab keeps the token) and starts a new session. A new tab is not paired: it says
+"Not paired: this link was used already or expired."
+
+The page renders every string from your project or the chain as text, under a strict Content-Security-Policy. The
+server never builds a transaction and never holds a key: the dev host prepares and the page signs.
+
+### Who may change the build (Gradle)
+
+The playground runs your build's own `./gradlew`, never a `gradle` from `PATH`. It refuses a build that another
+account could change: the directories from your project up to the one holding `settings.gradle`, that file and
+`gradlew` must be yours (or root's) and not writable by group or others. A link in place of the settings file or the
+wrapper is refused too.
+
+On a system whose umask is `002`, `joust new` or `git clone` leaves those paths group-writable. The playground then
+names every such path in one message and gives the command that fixes them all:
+
+```txt
+... are writable by others, so another account could change what Gradle runs. Fix (on a umask 002 system, say): chmod go-w '<path>' '<path>' ...
+```
+
+Run that `chmod` line. If you share the build directory on purpose, list it in `JOUST_SAFE_DIRS` instead (absolute
+paths, separated by `:`). Listing the build's root exempts its settings file and wrapper; each directory below it on
+the way to your project is checked unless it is listed too.
+
+The playground's cache (`~/.joust/playground`) must be yours and private, and no directory above it may be writable
+by others unless it is sticky (like `/tmp`). `JOUST_PLAYGROUND_HOME` (an absolute path) moves the cache. npm checks
+each package it installs against the registry's integrity hash and runs no install scripts.
+
+### With `joust dev`
+
+In an npm project on a DevKit network, `joust dev` serves the playground too, at `/playground/` beside your page. It
+prints a launcher link for it and renews the link after each use. That playground runs in DevKit mode with its own
+token, and rebuilds on save make its session stale as above. `joust dev`'s other routes (`/chain`, `/dev/topup`)
+answer any origin; the playground's do not.
+
+## Troubleshooting
+
+| Message (shortened) | What to do |
+|---|---|
+| `the Gradle playground needs Node.js 22+ (node on PATH)` | install Node.js 22 or newer |
+| `joust playground needs npm on PATH (it comes with Node.js)` | put `npm` on `PATH` |
+| `… is a development build: there is no @julclang/joust of its version on npm` | use a released `joust` |
+| `… is writable by others, so another account could change what Gradle runs` | run the `chmod go-w` line it prints, or use `JOUST_SAFE_DIRS` |
+| `… (above the playground's cache …) is writable by others and not sticky` | run the `chmod go-w` it names, or set `JOUST_PLAYGROUND_HOME` |
+| `no executable Gradle wrapper at …` | add the Gradle wrapper to the build |
+| `build/joust/host-spec.json is missing: ./gradlew joustHostSpec writes it` | apply the `org.julclang.joust` Gradle plugin |
+| `./gradlew build joustHostSpec failed`, with Gradle saying task `'joustHostSpec' not found` | the build does not apply the `org.julclang.joust` plugin: apply it ([Gradle builds](/apps/gradle-builds/)) |
+| `the dev host needs JDK 25 or later` | set the project's Java toolchain to 25 |
+| `joust playground: the build failed` | read the build output above it; for an intended `.jsc` change see [the ABI and the lock](#the-jsc-abi-and-the-lock) |
+| `the dev host reads build/joust; this project builds into …` | keep `out` at `build/joust` |
+| `--network needs --mode devkit (offline uses no network)` | add `--mode devkit`, or drop `--network` |
+| `… has no DevKit admin API. DevKit mode runs only on a Yaci DevKit` | use a DevKit network; public testnets are not supported |
+| `Yaci DevKit is not reachable (chain …, admin …)` | start it: `yaci-devkit up --enable-yaci-store` in its own terminal |
+| `… reads the chain through ogmios; DevKit mode reads it through Yaci Store's API` | use the network's Yaci Store `chain` |
+| No page opened | run `joust playground --no-open` and open the printed link |
+| `Not paired: this link was used already or expired` | run `joust playground` again (or with `--no-open`) |
+| `the project was rebuilt: start a new session to use the new build` | use the banner's new-session buttons |
+| `not modelled offline: try DevKit (…)` | the offline ledger does not model this transaction: run `--mode devkit` |
+| `has no free lovelace-only output of at least 5 ADA to designate for a keyed call` | **+ identity** or fund the signer, or let a pending keyed call settle |
+| `another playground (pid N) is using …: stop it first` | stop the other playground for this project and DevKit |
+| `… belongs to pid N, which is no longer running. If no playground is using it, remove the lock` | run the `rm` line it prints |
+| `another tab took this DevKit session` | continue in the newer tab, or reload this one |
+
+## Limitations
+
+- **DevKit only** for networks: no public testnets, never mainnet.
+- **Named views** run only in Gradle projects (the JVM dev host).
+- **Not every call can run.** A contract with `@Params` and a call with `@AuthorizedBy` are shown disabled with the
+  dev host's code (`params`, `authorizedBy`). So are call kinds the page does not drive yet, and arguments of a type
+  outside the form table. The page never works around one.
+- **CIP-30 wallets** cannot make keyed calls yet ("keyed calls from a connected wallet come later; use a test
+  identity"; [#187](https://github.com/bloxbean/joust/issues/187)), and cannot sign a `@Quorum` call: its signer and
+  co-signers are the page's identities.
+- **A reload starts a new session**, with new identities. Four reloads can end every offline session the server
+  keeps.
+- **The review** shows what the signer pays and receives, and lists the outputs, but does not yet label each output
+  as the signer's, the contract's or someone else's. Script budgets are not yet shown in the history.
+- **Offline "outcome unknown"** entries cannot be rechecked after **New session, keep the ledger**: check the state
+  before you repeat the call.
+- **The cache's dependencies** (Gradle) resolve on the day of the install, so two installs of the same version can
+  differ in their transitive packages.
+
+Open follow-ups are tracked in the [JOUST issues](https://github.com/bloxbean/joust/issues?q=is%3Aissue+is%3Aopen+playground).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="The dev host" href="/apps/dev-host/" description="The process that prepares every playground transaction." />
+  <LinkCard title="Testing" href="/contracts/testing/" description="Turn what you tried by hand into tests." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="What the validator guarantees, and what the attack suite probes." />
+  <LinkCard title="The joust CLI" href="/reference/joust-cli/" description="Every command, flag and the offline ledger's rules." />
+</CardGrid>

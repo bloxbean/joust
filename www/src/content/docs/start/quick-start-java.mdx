@@ -1,311 +1,176 @@
 ---
 title: "Quick start: Java & Gradle"
-description: Run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
+description: Create a JOUST project with joust new, check its JOUST version, then build, test and run its Counter contract (Java or .jsc) on Yaci DevKit.
 ---
 
 import { Aside, FileTree, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-This page takes you from an empty machine to a contract running on a local Cardano network, with Java 25 and
-Gradle. It has two parts: first you run the counter example inside a JOUST checkout (the quickest way to see
-everything work), then you set up a project of your own.
+This page takes you from the `joust` command to a contract running on a local Cardano network, with Java 25 and
+Gradle. You create a project with `joust new`, build and test it, and run it on Yaci DevKit. Then you look at each
+file it wrote.
 
-If you would rather use Node and no JDK, see [Quick start: npm & JavaScript](/start/quick-start-npm/).
+If you would rather use Node and no JDK, see [Quick start: JavaScript & TypeScript](/start/quick-start-npm/).
 
-<Aside type="caution" title="Experimental, pre-release: nothing is on Maven Central yet">
+<Aside type="caution" title="Experimental, pre-release">
 
-JOUST is a research and learning project: do not use it in production. Its releases, all pre-releases so far, are in
-the BloxBean release repository, `https://repo.bloxbean.org/maven/releases`, with the JuLC they need; the
-[releases page](https://github.com/bloxbean/joust/releases) lists them. Part 2 shows the Gradle setup.
+JOUST is a research and learning project: do not use it in production. Releases come often: the newest is the newest
+entry on the [releases page](https://github.com/bloxbean/joust/releases) whose tag starts with `v`.
 
 </Aside>
 
-## Prerequisites
+## Before you start
 
-- **JDK 25.** The build uses a Java toolchain of version 25.
-- **Git,** to clone JOUST for the example in Part 1.
-- **Yaci DevKit,** the local Cardano network, for the last step. Start it with Yaci Store (its Blockfrost-compatible
-  API) enabled:
+[Install JOUST](/start/install/) covers each of these.
 
-  ```sh
-  yaci-devkit up --enable-yaci-store
-  ```
+- **`joust`**: `brew install bloxbean/tap/joust`, or the archive for your platform from the
+  [releases page](https://github.com/bloxbean/joust/releases). Check it with `joust version`.
+- **JDK 25.** You do not need Gradle: the project comes with the Gradle wrapper.
+- **Node.js 22 or newer**, for Yaci DevKit's npm package and for the playground.
+- **Yaci DevKit** for the last step: `npm install -g @bloxbean/yaci-devkit` once, then
+  `yaci-devkit up --enable-yaci-store` in a terminal of its own. It is a private Cardano network on your machine: its
+  faucet hands out test ADA, so nothing costs real money.
 
-  Yaci Store then answers on `http://localhost:8080`, the DevKit admin API on `http://localhost:10000`, and the Yaci
-  Viewer explorer on `http://localhost:5173`. See [Networks and chain providers](/apps/networks-and-providers/).
-
-You do not need Gradle installed: the JOUST checkout has a wrapper (Gradle 9.2), and you can copy it.
-
-## Part 1: run the counter in a JOUST checkout
+## Create, build and run
 
 <Steps>
 
-1. **Get JOUST.**
+1. **Create the project.**
+
+   <Tabs syncKey="lang">
+   <TabItem label="Java">
 
    ```sh
-   git clone https://github.com/bloxbean/joust.git
-   cd joust
-   ```
-
-   The build resolves JuLC and cardano-client-lib (the versions in `gradle/libs.versions.toml`) from Maven Central and
-   the BloxBean repositories; nothing needs to be built first.
-
-2. **Run the counter's tests.**
-
-   ```sh
-   ./gradlew :examples:counter:test
-   ```
-
-   This compiles `Counter.java`, generates `CounterValidator` and `CounterClient`, compiles the validator to UPLC,
-   and runs three kinds of tests: the contract's methods as plain Java, the compiled validator against
-   transactions shaped like the runtime's, and the attack suite on each accepted transaction. The DevKit test
-   (`CounterDevnetTest`) runs too if DevKit is up, and skips itself otherwise.
-
-3. **Run it on DevKit.**
-
-   ```sh
-   ./gradlew :examples:counter:run
-   ```
-
-   `CounterApp` funds two fresh accounts from the DevKit faucet, deploys a counter as Alice, increments it as Bob and
-   Alice, shows Bob's reset being refused before anything is submitted, and closes the counter:
-
-   ```text
-     [joust] deploy Counter: submitted 34ba07cb2b9d13c18dba4c629966584fe06047283c2d5b5bb9e847f5cd3328b9
-   deployed instance d11c40ff686bcc687c6dffb98efd9b25c597c8377df049f12117ca5747b455a9 at addr_test1wptj8x0692g2q3fv8v5a5j90dwgfqkkge76s8cd0sq7fgtq9nldys
-   count = 0
-     [joust] Counter.increment: submitted 85ec809e34d3d0e37e2a6c62177e2ddb3d2da3da92841e162ced7f81e92af19a
-   bob +5   -> count = 5
-     [joust] Counter.increment: submitted c1733515f595a25a569ebeb5a4ce7fa73b190d33fe45173714b4722f305633de
-   alice +2 -> count = 7
-   bob reset rejected off-chain: Counter.reset: must be called by the key in 'owner'
-     [joust] Counter.reset: submitted f1f17a47fcb0f0f77888786bbd960def8bfef0b33a57f7ea41b3fdbe7e3c2648
-   alice reset -> count = 0
-     [joust] Counter.close: submitted c4419d0bb7e0b1f6fdf025eb90ae699e1d6c54c4a8907cb31e85862d36d4306d
-   alice closed the counter in c4419d0bb7e0b1f6fdf025eb90ae699e1d6c54c4a8907cb31e85862d36d4306d, paid back [Payout[to=[B@78d39a69, lovelace=2200000]]
-   ```
-
-   Your hashes will differ. The first run on a fresh DevKit also logs `published the Counter reference script in
-   ...`: the first deploy of a contract on a network publishes its script once, for every later transaction to read.
-   Open the address in Yaci Viewer (`http://localhost:5173`) to see the state UTxOs and their datums.
-
-</Steps>
-
-Every example in `examples/` runs the same way: `./gradlew :examples:vault:run`, `:examples:escrow:run`, and so on.
-See [Examples](/reference/examples/).
-
-## Part 2: your own project
-
-### Create it with `joust new`
-
-<Steps>
-
-1. **Install `joust`.**
-
-   ```sh
-   brew install bloxbean/tap/joust
-   ```
-
-   Or unpack the archive for your platform (macOS arm64, Linux x86_64 or arm64) from the
-   [releases](https://github.com/bloxbean/joust/releases) and put `joust` on your `PATH`.
-
-2. **Create the project.**
-
-   ```sh
-   joust new my-counter              # Counter.java; -l jsc for a .jsc contract (a language preview), -p org.example for your package
+   joust new my-counter                  # -p org.example for your own package (default: app)
    cd my-counter
    ```
 
-3. **Build, test and run.**
+   </TabItem>
+   <TabItem label=".jsc">
 
    ```sh
-   ./gradlew build                   # or: joust build
-   ./gradlew run                     # the counter on DevKit (or: joust run)
+   joust new my-counter -l jsc           # the contract in .jsc, a language preview
+   cd my-counter
    ```
+
+   </TabItem>
+   </Tabs>
+
+   ```text
+   Created /path/to/my-counter (Gradle, java, JOUST <version>)
+
+     cd my-counter
+     ./gradlew build     # the validator, the client, the description; and the tests
+     ./gradlew run       # the counter on Yaci DevKit: yaci-devkit up --enable-yaci-store
+   ```
+
+   The directory must be new or empty. It holds a `Counter` contract, its tests, a small app that runs it on DevKit,
+   and the Gradle wrapper ([what it wrote](#what-joust-new-wrote)).
+
+2. **Check the JOUST version.** It is the version on the plugin line of `build.gradle`:
+
+   ```groovy title="build.gradle"
+   plugins {
+       id 'application'
+       // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings.
+       // Upgrading JOUST is this version.
+       id 'org.julclang.joust' version '<version>'
+   }
+   ```
+
+   `joust new` writes the version of the `joust` that ran it. Compare it with the newest release on the
+   [releases page](https://github.com/bloxbean/joust/releases) (the newest tag starting with `v`, not the "Development
+   snapshot" entry). If yours is older, change the version here, and `brew upgrade joust` for your next project. The
+   plugin brings matching JuLC and cardano-client-lib versions with it, so this is the only version to keep up to date.
+
+3. **Build.**
+
+   ```sh
+   ./gradlew build                       # or: joust build
+   ```
+
+   The first build downloads the plugin, JuLC and cardano-client-lib. It compiles the contract, generates its
+   validator and client, compiles the validator to UPLC, and runs the tests:
+
+   | Output | Where | What it is |
+   |---|---|---|
+   | `CounterValidator.java` | `build/generated/sources/annotationProcessor/java/main/app/` | The on-chain validator source (MINT + SPEND) |
+   | `CounterClient.java` | same | The typed client: `deploy`, `at`, `increment`, `reset`, `close`, `count`, `state` |
+   | `CounterValidator.plutus.json` | `build/classes/java/main/META-INF/plutus/` | The compiled UPLC script; the runtime and the testkit load it from the classpath |
+   | `app.Counter.json` | `build/classes/java/main/META-INF/joust/` | The description (CIP-57 plus `x-joust`) JavaScript clients are generated from |
+
+   Read the generated sources: they are ordinary Java, and every check the validator makes is visible in
+   `CounterValidator.java`. If your contract breaks a rule (an `int` in a method, two `@Init` methods, a `@Payable`
+   without `Ctx`), the build fails with a compiler error on the offending line; see [Java](/languages/java/).
+
+4. **Test.**
+
+   ```sh
+   ./gradlew test                        # or: joust test
+   ```
+
+   `build` already ran them; this runs only the tests.
+
+   `CounterTest` runs the contract's methods as plain Java, then evaluates the compiled validator against
+   transactions shaped like the runtime's, and runs the attack suite on each accepted one.
+
+5. **Run it on DevKit.** Start DevKit in another terminal if it is not running
+   (`yaci-devkit up --enable-yaci-store`, and leave it running), then:
+
+   ```sh
+   ./gradlew run                         # or: joust run
+   ```
+
+   `CounterMain` funds two fresh accounts from the DevKit faucet, deploys a counter as Alice, increments it as Bob and
+   Alice, shows Bob's reset being refused before anything is submitted, and closes the counter (hashes shortened):
+
+   ```text
+     [joust] deploy Counter: submitted 34ba07cb…
+   deployed instance d11c40ff…
+     [joust] Counter.increment: submitted 85ec809e…
+     [joust] Counter.increment: submitted c1733515…
+   count = 7
+   refused before submitting: Counter.reset: must be called by the key in 'owner'
+     [joust] Counter.close: submitted c4419d0b…
+   closed in c4419d0b…
+   ```
+
+   Your hashes will differ. The first run on a fresh DevKit also logs `publish the Counter reference script: submitted
+   ...` and `published the Counter reference script in ...`: the first deploy of a contract on a network publishes its
+   script once, for every later transaction to read.
+   Paste a transaction hash from the output into Yaci Viewer (`http://localhost:5173`) to see the state UTxO and its
+   datum.
 
 </Steps>
 
-`joust new` (the native `joust` and the Gradle plugin `org.julclang.joust`, [ADR-0017](/project/architecture-decisions/))
-writes the files of the sections below, with the Gradle wrapper, and a `build.gradle` that is only this:
-
-```groovy title="build.gradle"
-plugins {
-    id 'application'
-    id 'org.julclang.joust' version '<version>'    // a JOUST release; upgrading JOUST is this version
-}
-
-repositories {
-    mavenCentral()
-    maven {     // BloxBean: JOUST and JuLC releases
-        url = uri('https://repo.bloxbean.org/maven/releases')
-        mavenContent { releasesOnly() }
-    }
-}
-
-application {
-    mainClass = 'app.CounterMain'
-}
-```
-
-The plugin does what the hand-written `build.gradle` below spells out:
-
-| It adds | At |
-|---|---|
-| `julc-state-runtime`, and `cardano-client-backend-blockfrost` for DevKit (`joust { blockfrost = false }` leaves it out) | `implementation` |
-| `julc-state-processor`, `julc-annotation-processor`, `julc-state-api:<v>:onchain` | the annotation processor path |
-| `julc-state-testkit`, `junit-platform-launcher` | the tests |
-| UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
-| `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling; with it `acceptJscAbi`, `checkJscAbi` (the [ABI manifest](/languages/jsc-reference/#the-abi-manifest)) and `remapJscDiagnostics` (javac's errors on the generated Java, at their `.jsc` positions) | the build |
-| `joustHostSpec`, the protocol 1 launch manifest for an editor's dev host | `build/joust/host-spec.json` |
-
-For an editor launch from a trusted project, run `./gradlew joustHostSpec`. It builds the main runtime class path
-and records its entries in lookup order, with the toolchain's Java executable and SHA-256 digests. The isolated
-`joustHost` configuration supplies the plugin's serving adapter and stdio host. An HTTP application reuses its
-matching adapter. A version mismatch or a jar with a manifest `Class-Path` fails the task. The editor verifies a
-private, read-only copy of those entries and starts `DevHost --stdio` from that snapshot.
-
-`joust new` fills in the version of the `joust` that runs it; the newest is the newest release whose tag starts with
-`v` on the [releases page](https://github.com/bloxbean/joust/releases) (`npm view @julclang/joust version`). Every other version comes from the JOUST release the
-plugin belongs to, so the JuLC and cardano-client-lib versions always match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).
-
-The same command writes npm projects: `joust new my-app -t node` gives what `npm create joust` gives. In a project, the
-native `joust` and the npm one answer the same commands; see [the native `joust`](/reference/joust-cli/#the-native-joust).
-
-### Or set it up by hand: choose where JOUST comes from
-
-<Tabs>
-<TabItem label="BloxBean release repository">
-
-Releases are published to `https://repo.bloxbean.org/maven/releases`. Use as `<version>` below the newest release
-whose tag starts with `v` on the [releases page](https://github.com/bloxbean/joust/releases) (not the "Development
-snapshot" entry), without the `v`. The quickest check is `npm view @julclang/joust version`, since each release
-publishes the npm packages at the same version. Nothing is on Maven Central yet.
-
-</TabItem>
-<TabItem label="Your checkout, via mavenLocal">
-
-To try what is on `main` before it is released, publish the library modules of your checkout to `~/.m2`:
-
-```sh
-cd joust
-./gradlew publishToMavenLocal
-grep '^version' gradle.properties            # the JOUST version you just published
-grep '^julc ' gradle/libs.versions.toml     # and the JuLC version it needs
-```
-
-This publishes `julc-state-api` (with its `onchain` jar), `-processor`, `-runtime`, `-testkit`, `-verifier`, `-dsl`
-and `-server`. Add `mavenLocal()` to the repositories below.
-
-</TabItem>
-</Tabs>
-
-### The build files by hand
+## What `joust new` wrote
 
 <FileTree>
 
 - my-counter/
-  - settings.gradle
+  - settings.gradle where the plugin comes from
+  - build.gradle the plugin, with the JOUST version
   - gradle.properties
-  - build.gradle
-  - gradlew (copied from the JOUST checkout, with gradle/wrapper/)
+  - gradlew the Gradle wrapper, with gradle/wrapper/
+  - README.md
   - src/
-    - main/java/app/
-      - Counter.java
-      - Devnet.java
-      - CounterMain.java
+    - main/
+      - java/app/
+        - Counter.java the contract (with -l jsc: src/main/jsc/app/Counter.jsc and Counter.abi.json)
+        - CounterMain.java the DevKit app
+        - Devnet.java the DevKit connection
     - test/java/app/
       - CounterTest.java
 
 </FileTree>
 
-```groovy title="settings.gradle"
-rootProject.name = 'my-counter'
-```
+The plugin `org.julclang.joust` does the JOUST setup: the processors, the on-chain sources, the runtime and the
+testkit, at versions that match. [Gradle builds](/apps/gradle-builds/) lists what it adds, and how to set up a build
+by hand instead.
 
-```properties title="gradle.properties"
-# The JOUST release: the newest tag starting with v on https://github.com/bloxbean/joust/releases, without the v
-# (not the "Development snapshot" entry); or run: npm view @julclang/joust version
-joustVersion=<version>
-# The JuLC and cardano-client-lib it was built with: the julc and cardano-client-lib entries of
-# gradle/libs.versions.toml at that release's tag (v<version>)
-julcVersion=<version>
-cclVersion=<version>
-```
+### The contract
 
-`julcVersion` is JuLC's processor, the one that compiles your validator, and `cclVersion` is cardano-client-lib's.
-Take both from the release you chose: its
-[`gradle/libs.versions.toml`](https://github.com/bloxbean/joust/blob/main/gradle/libs.versions.toml) (open it at the tag
-`v<version>`) names the `julc` and `cardano-client-lib` versions it was built and tested with. The Gradle plugin does
-this for you.
-
-```groovy title="build.gradle"
-plugins {
-    id 'application'
-}
-
-java {
-    toolchain { languageVersion = JavaLanguageVersion.of(25) }
-}
-
-repositories {
-    mavenCentral()
-    maven {          // BloxBean releases: JOUST, JuLC
-        url = uri('https://repo.bloxbean.org/maven/releases')
-        mavenContent { releasesOnly() }
-    }
-}
-
-dependencies {
-    implementation "org.julclang:julc-state-runtime:$joustVersion"
-    implementation "com.bloxbean.cardano:cardano-client-backend-blockfrost:$cclVersion"   // Yaci Store / Blockfrost
-
-    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
-    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
-    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
-
-    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.compilerArgs << '-parameters'
-}
-
-tasks.withType(Test).configureEach {
-    useJUnitPlatform()
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
-    systemProperty 'joust.mapStore', 'memory'    // MerkleMap mirrors in memory for tests
-}
-
-application {
-    mainClass = 'app.CounterMain'
-}
-
-tasks.named('run', JavaExec) {
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
-}
-```
-
-What each line on the annotation processor path is for:
-
-| Dependency | Why it is there |
-|---|---|
-| `julc-state-processor` | The JOUST processor: generates `<Name>Validator`, `<Name>Client` and the description |
-| `julc-annotation-processor` | JuLC's processor: compiles the generated validator to UPLC in the next round |
-| `julc-state-api:<version>:onchain` | The `julc-state-api` **sources**, under `META-INF/plutus-sources/`. JuLC compiles against its own on-chain API plus library sources it finds on the processor path; without these it cannot see `Ctx`, `Require`, `Payouts` and the rest |
-
-<Aside type="tip" title="Inside the JOUST build: a directory, not a jar">
-
-Modules inside the JOUST repository use the same bundle as a **directory**:
-`annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')`, as in
-[`examples/counter/build.gradle`](https://github.com/bloxbean/joust/blob/main/examples/counter/build.gradle). A jar
-that is rebuilt while a Gradle daemon is running can make JuLC's source scan silently find nothing (ADR-0001 F8). A
-published jar does not change, so this rarely matters outside the repository; if a build suddenly reports that JuLC
-cannot resolve `Ctx` or `Require`, run `./gradlew --stop` and build again.
-
-</Aside>
-
-### Write the contract
+<Tabs syncKey="lang">
+<TabItem label="Java">
 
 ```java title="src/main/java/app/Counter.java"
 package app;
@@ -359,29 +224,50 @@ public class Counter {
 }
 ```
 
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc title="src/main/jsc/app/Counter.jsc"
+jsc 1
+package app
+
+contract Counter(maxDatumBytes = 128) {
+  state { count: Int, owner: Key }
+
+  init() {
+    return { count: 0, owner: caller }
+  }
+
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
+
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  view count(): Int = count
+}
+```
+
+The build lowers it to the Java contract on the other tab (into `build/generated/sources/jsc`) and compiles that.
+`Counter.abi.json` beside it records how the state and the calls are encoded on chain: the build fails when that
+changes, until you accept it with `./gradlew acceptJscAbi` and commit the new manifest. `.jsc` is a language preview:
+a later JOUST may compile the same file to a different script hash, so use it on DevKit and testnets, not to hold
+value. See [.jsc](/languages/jsc/).
+
+</TabItem>
+</Tabs>
+
 This is the [counter example](https://github.com/bloxbean/joust/blob/main/examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java)
 in package `app`. [Your first contract](/start/first-contract/) explains every line.
 
-### Build
-
-```sh
-./gradlew build
-```
-
-The build writes:
-
-| Output | Where | What it is |
-|---|---|---|
-| `CounterValidator.java` | `build/generated/sources/annotationProcessor/java/main/app/` | The on-chain validator source (MINT + SPEND) |
-| `CounterClient.java` | same | The typed client: `deploy`, `at`, `increment`, `reset`, `close`, `count`, `state` |
-| `CounterValidator.plutus.json` | `build/classes/java/main/META-INF/plutus/` | The compiled UPLC script; the runtime and the testkit load it from the classpath |
-| `app.Counter.json` | `build/classes/java/main/META-INF/joust/` | The description (CIP-57 plus `x-joust`) JavaScript clients are generated from |
-
-Read the generated sources: they are ordinary Java, and every check the validator makes is visible in
-`CounterValidator.java`. If your contract breaks a rule (an `int` in a method, two `@Init` methods, a `@Payable`
-without `Ctx`), the build fails with a compiler error on the offending line; see [Java](/languages/java/).
-
-### Test it on the JVM
+### The test
 
 `julc-state-testkit` gives you `StateHarness`, which evaluates the compiled validator against transactions shaped
 like the ones the runtime builds, and `Attacks`, which mutates each accepted transaction in every way the
@@ -434,18 +320,48 @@ class CounterTest {
 }
 ```
 
-```sh
-./gradlew test
-```
-
 The examples' [`CounterTest`](https://github.com/bloxbean/joust/blob/main/examples/counter/src/test/java/org/julclang/state/examples/counter/CounterTest.java)
 covers every call, including the create and the close; [Testing](/contracts/testing/) explains the harness.
 
-### Run it on DevKit
+### The DevKit app
 
-The runtime needs a `StateRuntime`: a chain backend, the network's slot clock, and a few options. The examples get
-one from a small helper, [`examples/devkit/.../DevKit.java`](https://github.com/bloxbean/joust/blob/main/examples/devkit/src/main/java/org/julclang/state/examples/devkit/DevKit.java).
-This is a trimmed copy of it:
+`CounterMain` is the app `./gradlew run` starts. It calls the generated `CounterClient`:
+
+```java title="src/main/java/app/CounterMain.java"
+package app;
+
+import org.julclang.state.api.RequireException;
+
+import java.math.BigInteger;
+
+public class CounterMain {
+    public static void main(String[] args) throws Exception {
+        var runtime = Devnet.runtime();
+        var alice = Devnet.fundedAccount(500);
+        var bob = Devnet.fundedAccount(500);
+
+        CounterClient counter = CounterClient.deploy(runtime, alice);
+        System.out.println("deployed instance " + counter.instanceId());
+
+        counter.increment(bob, BigInteger.valueOf(5));
+        counter.increment(alice, BigInteger.TWO);
+        System.out.println("count = " + counter.count());               // 7
+
+        try {
+            counter.reset(bob);                                         // not the owner
+        } catch (RequireException e) {
+            System.out.println("refused before submitting: " + e.getMessage());
+        }
+
+        var closed = counter.close(alice);                              // the deposit goes back to alice
+        System.out.println("closed in " + closed.txHash());
+    }
+}
+```
+
+The runtime needs a `StateRuntime`: a chain backend, the network's slot clock, and a few options. `Devnet` makes one
+for DevKit; it is a trimmed copy of the examples' helper,
+[`examples/devkit/.../DevKit.java`](https://github.com/bloxbean/joust/blob/main/examples/devkit/src/main/java/org/julclang/state/examples/devkit/DevKit.java):
 
 ```java title="src/main/java/app/Devnet.java"
 package app;
@@ -519,70 +435,66 @@ final class Devnet {
 }
 ```
 
-```java title="src/main/java/app/CounterMain.java"
-package app;
-
-import org.julclang.state.api.RequireException;
-
-import java.math.BigInteger;
-
-public class CounterMain {
-    public static void main(String[] args) throws Exception {
-        var runtime = Devnet.runtime();
-        var alice = Devnet.fundedAccount(500);
-        var bob = Devnet.fundedAccount(500);
-
-        CounterClient counter = CounterClient.deploy(runtime, alice);
-        System.out.println("deployed instance " + counter.instanceId());
-
-        counter.increment(bob, BigInteger.valueOf(5));
-        counter.increment(alice, BigInteger.TWO);
-        System.out.println("count = " + counter.count());               // 7
-
-        try {
-            counter.reset(bob);                                         // not the owner
-        } catch (RequireException e) {
-            System.out.println("refused before submitting: " + e.getMessage());
-        }
-
-        var closed = counter.close(alice);                              // the deposit goes back to alice
-        System.out.println("closed in " + closed.txHash());
-    }
-}
-```
-
-```sh
-./gradlew run
-```
-
 ## Try it in the playground
 
+<Aside type="caution" title="Experimental">
+The playground runs on JOUST's npm packages and their WebAssembly engine, even for a Gradle project.
+</Aside>
+
+The playground is a page in your browser where you call your contract without writing any code: pick who signs, fill
+in a form, review the transaction, approve. It needs Node.js 22 or newer, and runs offline (no DevKit) by default.
+
 ```sh
-joust playground                  # ./gradlew build joustHostSpec, then a browser page for every contract, offline
+joust playground
 ```
 
-`joust playground` ([ADR-0024](/project/architecture-decisions/)) opens a generated page for every contract of the
-project: test identities (Alice, Bob, Carol) whose keys stay in the page, a form for each call, the state and named
-views, an in-memory ledger that checks the node's phase-1 rules it models and runs the scripts with JuLC's VM, and the
-attack suite on every script transaction. Every transaction is checked by the page and shown for review before an
-identity signs it. It needs **Node.js 22+**: the native `joust` installs the `@julclang/joust` of its own version once
-into `~/.joust/playground/<version>` and runs the playground from there, never from the project. The build runs through
-your wrapper with its gates (`checkJscAbi`, the lock check); accept an intended change with `./gradlew acceptJscAbi`.
-The dev host runs a private, verified copy of the build: after a rebuild, start a new session in the page to use it.
-The playground refuses a build that other accounts could change: the project's directories up to its `settings.gradle`,
-that file and `gradlew` must be yours and not group- or world-writable. On a system whose umask is `002` (where
-`joust new` or `git clone` leaves them `775`/`664`), it names every such path and the one command that fixes them
-(`chmod go-w <paths>`); or list the build's directory in `JOUST_SAFE_DIRS` if you share it on purpose.
-Offline success is not a node's acceptance; DevKit mode comes later.
+The first run installs the playground once into `~/.joust/playground/<version>` (with npm), then runs
+`./gradlew build joustHostSpec` and opens the page. If it refuses because other accounts could change your build, it
+prints the `chmod go-w` command that fixes it.
+
+<Steps>
+
+1. Click `Counter` under **Contracts**. Its operations appear as cards: `init`, `increment`, `reset` and `close`.
+2. Click **Review…** on `init`. The first call publishes the contract's script, so you approve a **Review publication**
+   dialog first, then the call's own. Click **Approve and sign as Alice** in each. The new counter appears under
+   **Instances**.
+3. Type `5` into `by` on the `increment` card, click **Review…** and approve. The state shows the count 5.
+4. Choose Bob under **Identities** and click **Review…** on `reset`. Bob is not the owner, so it is refused before
+   anything is signed.
+
+</Steps>
+
+![The playground after these steps: the counter's state shows count 5, and the History shows Bob's reset refused above Alice's confirmed calls](../../../assets/playground/playground-state.webp)
+
+**Ctrl-C** in the terminal stops it. `--mode devkit` runs the same page against a running Yaci DevKit.
+[The playground](/apps/playground/) explains everything on the page.
+
+## Explore the examples
+
+The JOUST repository has one tested example per feature: vaults, escrows, tokens in MerkleMaps, banks, pools, a DEX
+and more. To run them, clone it (no `joust` needed; the checkout has its own Gradle wrapper):
+
+```sh
+git clone https://github.com/bloxbean/joust.git
+cd joust
+./gradlew :examples:counter:test          # JVM, harness and attack-suite tests; the DevKit test if DevKit is up
+./gradlew :examples:vault:run             # an example's app on DevKit
+```
+
+The checkout builds against its own modules, so it is the code on `main`, which may be ahead of the newest release.
+See [Examples](/reference/examples/).
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could not find org.julclang:julc-...` | A repository is missing, or `julcVersion` is not the one your JOUST needs. Add the BloxBean release repository (and `https://repo.bloxbean.org/maven/snapshots` for a development snapshot) and use the `julc` entry of `gradle/libs.versions.toml` at your JOUST release's tag |
-| JuLC errors such as "cannot resolve" `Ctx` or `Require` | The `onchain` bundle is missing from the annotation processor path, or a long-lived daemon holds a stale jar: check the dependency, then `./gradlew --stop` |
+| `joust: command not found` | Install it ([Install JOUST](/start/install/)), or put the unpacked archive's `joust` on your `PATH` |
+| `No matching toolchains found ... languageVersion=25` | The project needs a Java 25 toolchain: install JDK 25 |
+| `Plugin [id: 'org.julclang.joust', version: '...'] was not found` | The plugin version in `build.gradle` is not a JOUST release: compare it with the [releases page](https://github.com/bloxbean/joust/releases) |
+| `Could not find org.julclang:julc-...` | A repository is missing from the build. For a hand-written build, see [Gradle builds](/apps/gradle-builds/#troubleshooting) |
 | `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
-| `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in the examples) |
+| Connection refused on `localhost:8080` or `:10000` | DevKit is not running: `yaci-devkit up --enable-yaci-store` |
+| `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in `Devnet`) |
 
 More in [Troubleshooting](/reference/troubleshooting/).
 

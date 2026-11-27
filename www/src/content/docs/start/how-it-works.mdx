@@ -68,8 +68,7 @@ In detail, inside the build:
 
 </Steps>
 
-Code is generated from string templates, so every construct emitted is one JuLC is known to accept
-([ADR-0001](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md) §2).
+Code is generated from string templates, so every construct emitted is one JuLC is known to accept.
 
 ## The generated validator
 
@@ -127,8 +126,7 @@ A method without `Ctx` gets none of these checks, and is cheaper.
 `TxOutRef` of the state input that owes it. Two instances spent in one transaction can therefore never count the
 same output (double satisfaction).
 
-The full list, with the attack that each check stops, is in [Security model](/contracts/security-model/) and
-ADR-0001 §4.
+The full list, with the attack that each check stops, is in [Security model](/contracts/security-model/).
 
 ## The generated client and the runtime
 
@@ -215,20 +213,20 @@ JOUST offers other strategies, chosen by how you declare the state:
 | Inline (Option A) | A state record | Contracts with modest state and modest traffic | [State and lifecycle](/contracts/state-and-lifecycle/) |
 | MerkleMap (Option B) | A `MerkleMap` component in the state | Unbounded maps (balances, registries): the datum keeps a 32-byte root, each call proves the keys it touches, checked by the shared map verifier | [MerkleMaps](/contracts/merklemaps/) |
 | Owned objects (Option C) | An `@Owned` record and owned methods | Per-user objects in their own UTxOs, beside shared state read by reference, so users do not contend | [Owned objects](/contracts/owned-objects/) |
-| Keyed objects (ADR-0016) | `@Owned(key = "...")` on an owned record | At most one object per key (ballots, names), each its own UTxO in a sorted on-chain list; uniqueness is proved by the neighbours | [Keyed objects](/contracts/keyed-objects/) |
+| Keyed objects | `@Owned(key = "...")` on an owned record | At most one object per key (ballots, names), each its own UTxO in a sorted on-chain list; uniqueness is proved by the neighbours | [Keyed objects](/contracts/keyed-objects/) |
 | Batched intents (Option D) | `@Batched` on an action | Hot shared state: users lock requests in parallel, a permissionless batcher applies them in one transaction | [Batched intents](/contracts/batched-intents/) |
 
 On top of these: native assets and contract-minted tokens, deploy-time parameters, quorums and script callers,
 invariants and events, staking and governance purposes, composition of several contracts in one transaction, and
-upgrades. Each has a guide under "Writing contracts", and an ADR in
-[`docs/adr`](https://github.com/bloxbean/joust/tree/main/docs/adr).
+upgrades. Each has a guide under "Writing contracts", and the reasoning behind it is in
+[Architecture decisions](/project/architecture-decisions/).
 
 ## The npm and Wasm path
 
 ![A JOUST page from the browser to the chain (npm path, experimental)](../../../assets/diagrams/browser-path.svg)
 
-JavaScript developers use the same processor, validators and runtime, compiled to WebAssembly by JOUST's own build
-(ADR-0015), so they need Node and nothing else.
+JavaScript developers use the same processor, validators and runtime, compiled to WebAssembly by JOUST's own build,
+so they need Node and nothing else.
 
 - **The toolchain engine** (in `@julclang/joust`) runs the build in Node: `.jsc` lowering, javac with the JOUST
   processor, and JuLC's compiler, with no JDK. It writes the compiled validators, the descriptions and typed

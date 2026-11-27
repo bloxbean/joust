@@ -38,7 +38,7 @@ StateRuntime runtime = StateRuntime.builder(backend)
 
 `startSec` and `slotLengthSec` come from DevKit's admin API
 (`GET http://localhost:10000/local-cluster/api/admin/devnet`, fields `startTime` and `slotLength`); the
-[quick start](/start/quick-start-java/#run-it-on-devkit) has a complete helper.
+[quick start](/start/quick-start-java/#the-devkit-app) has a complete helper.
 
 Against the preview testnet through Blockfrost, the clock is preview's genesis (system start 1666656000, one-second
 slots from slot 0, as `js/joust/src/config.js` pins it):

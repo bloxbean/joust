@@ -1,0 +1,502 @@
+---
+title: The dev host
+description: What JOUST's dev host is, when you meet it, and how a tool launches and drives it over stdio with protocol 1.
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The **dev host** is a small process that runs your project's own JOUST for another program. A tool (the
+[playground](/apps/playground/), an editor plugin) starts it for one project, talks to it over stdin and stdout, and
+asks it to describe contracts, read state and prepare unsigned transactions. The tool keeps the keys, the chain and
+the clock. The host only computes.
+
+This page has two parts. The first is for app developers: what the host is and when you need to care. The second is
+for authors of editors and other tools who want to drive it.
+
+<Aside type="caution" title="Experimental">
+
+JOUST is experimental and pre-release, and so is the dev host and its protocol. Do not depend on it for production.
+
+</Aside>
+
+## For app developers
+
+### Why it exists
+
+Your contract compiles to a script, and the script's hash (a fingerprint of its bytes) decides the contract's address
+on chain. [JuLC](/reference/glossary/#julc), the compiler JOUST uses to turn Java into Cardano scripts, produces
+different bytes in different versions. So a tool that bundled its own JOUST could build transactions for other
+scripts at other addresses. The dev host avoids that: it is always the project's own JOUST, with the project's
+generated clients, run as a separate process. The project's classes never load into the tool's process.
+
+There are two hosts that speak the same protocol:
+
+| Project | Host | Runs |
+| --- | --- | --- |
+| Gradle | The JVM host, `org.julclang.state.host.DevHost` in `julc-state-host` | The project's main runtime class path, with the project's JDK 25+ toolchain |
+| npm | The Node host, `bin/joust-host.js` in the project's `@julclang/joust` | The JOUST engine (Wasm) over `build/joust/contracts.json` |
+
+### What it does not do
+
+The host holds no key and never signs. It does not submit transactions and never learns a node's address: every chain
+read is a request to the tool, which answers it from its own node or provider. It reads no network, endpoint or
+credential from the project or the environment. The tool checks every transaction itself before anyone signs it.
+
+### Do you need to touch it?
+
+Usually not. `joust playground` builds the project, starts the host and talks to it for you. What you may notice:
+
+<Tabs>
+<TabItem label="npm project">
+
+- **The host needs a build.** It reads `build/joust/contracts.json`, which `joust build` writes.
+- **It runs the files it loaded at launch.** Editing or rebuilding the project later does not change a running
+  session. **After a rebuild, start a new session** to use it.
+- **Versions must match.** Contracts built by another JOUST version than the installed runtime are refused: rebuild
+  with `joust build`.
+
+</TabItem>
+<TabItem label="Gradle project">
+
+- **The project needs the plugin.** The JOUST Gradle plugin (`org.julclang.joust`) adds the `joustHostSpec` task,
+  which writes `build/joust/host-spec.json`. `joust playground` runs `./gradlew build joustHostSpec`. A build written
+  by hand without the plugin has no `joustHostSpec` (see [Gradle builds](/apps/gradle-builds/)).
+- **The host runs a private, verified copy of the build.** The tool copies every class-path entry into a private,
+  read-only snapshot, checks its hashes and launches the host from that copy. Rebuilding the project later does not
+  change a running session. **After a rebuild, start a new session** to use it.
+- **Versions must match.** The plugin resolves the host and its serving adapter (`julc-state-serve`) at the plugin's
+  own version. If your application selects another version of either, `joustHostSpec` fails ("incompatible host" or
+  "incompatible adapter"). A jar with a manifest `Class-Path` also fails the task.
+
+</TabItem>
+</Tabs>
+
+In both, the playground says so when you rebuild: "the project was rebuilt: start a new session to use the new
+build".
+
+**Some contracts and calls are not served.** The host prepares only transactions the tool can check before signing.
+It refuses:
+
+- calls that need a governor's approval (`@AuthorizedBy`), and contracts with `@Params` (listed, but not served);
+- [batched intents](/contracts/batched-intents/);
+- [owned objects](/contracts/owned-objects/) moved into another instance, and `@Admits` actions;
+- [migrations](/contracts/upgrades/) (`@MigrateTo`);
+- [deposits](/contracts/deposits/) (`@Receives` actions, and calls that make deposits);
+- methods that [read other contracts](/contracts/reads-and-composition/), and other calls whose inputs only a prepare
+  service can supply;
+- [staking and governance](/contracts/staking-and-governance/) purpose handlers, and `@Quorum` on creations;
+- keyed calls it cannot check, such as a removal whose method takes no `Ctx` (`unsupported/keyed`).
+
+Named views run only on the JVM host; the Node host serves the state and listings, not named views.
+
+<Aside type="note" title="Planned">
+
+Serving `@Params` contracts and `@AuthorizedBy` calls is planned, not available today.
+
+</Aside>
+
+That is all most app developers need. The rest of this page is for tool authors.
+
+## For tool authors
+
+The protocol is **dev host protocol 1**. Its normative text is
+[`docs/protocol/dev-host-1.md`](https://github.com/bloxbean/joust/blob/main/docs/protocol/dev-host-1.md), with JSON
+schemas (draft 2020-12) for
+[methods, results, reverse reads and errors](https://github.com/bloxbean/joust/tree/main/docs/protocol/dev-host-1)
+and a [conformance kit](https://github.com/bloxbean/joust/blob/main/docs/protocol/dev-host-1-conformance.md). This page
+is a guide to it; read the protocol document for the exact rules, ordering and limits.
+
+### Who does what
+
+| The client (your tool) | The host |
+| --- | --- |
+| Gets the user's trust in the project and an explicit action before launching | Runs only the verified snapshot it was started on |
+| Owns keys, signing, submission and its node or provider | Holds no key; never submits |
+| Supplies the network, the slot clock and `now` for every call | Takes time and network only from the client |
+| Answers every chain read (`chain/read`) | Asks for what it needs, within the call's budgets |
+| Checks every prepared transaction before signing or exporting it | Prepares unsigned transactions and reserves their inputs |
+| Persists its transaction journal and reports settlement | Keeps reservations in memory for the session |
+| Persists, per chain, the highest `validTo + settlementSlots` of every body it hands out | After a restart or rewind, refuses builds (`refusal/reconcile`) until `restore` completes |
+
+The reference client in this repository is the playground's:
+[`js/joust/src/playground/host.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/playground/host.js)
+(launch, framing, calls, reverse reads) and
+[`gradle.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/playground/gradle.js) (the Gradle launch).
+
+### Launching the host
+
+<Tabs>
+<TabItem label="Gradle project">
+
+<Steps>
+
+1. Run `./gradlew joustHostSpec` in the trusted contract project (the playground runs
+   `./gradlew build joustHostSpec`, so the build's own checks run too). The task builds the main runtime class path
+   and records its entries in lookup order, with the toolchain's Java executable and each file's SHA-256. The plugin's
+   isolated `joustHost` configuration supplies the serving adapter (`julc-state-serve`) and the stdio host
+   (`julc-state-host`) at the plugin's version; an HTTP application that already has the matching adapter reuses it.
+   A version mismatch, or a jar with a manifest `Class-Path`, fails the task. Read `build/joust/host-spec.json` only
+   after the task succeeds. The task is untracked: it checks the files again on every run.
+
+2. Read the spec. Its fields are `protocol` (1), `java` (the absolute path of the toolchain's `java`), `mainClass`
+   (`org.julclang.state.host.DevHost`), `launch` (the ordered class-path entries) and `digest`. A `dir` entry maps each
+   file's relative POSIX path to its lowercase SHA-256; a `jar` entry has one `sha256`.
+
+   ```json
+   {
+     "protocol": 1,
+     "java": "/path/to/jdk-25/bin/java",
+     "mainClass": "org.julclang.state.host.DevHost",
+     "launch": [
+       { "ordinal": 0, "kind": "dir", "path": "/project/build/classes/java/main",
+         "files": { "<relative path>": "<sha256>" } },
+       { "ordinal": 1, "kind": "jar", "path": "/home/me/.gradle/caches/.../julc-state-runtime-<version>.jar",
+         "sha256": "<sha256>" }
+     ],
+     "digest": "<sha256>"
+   }
+   ```
+
+3. Copy every entry into a private, read-only snapshot. Copy only regular files, opened without following links and
+   without blocking. Check each file's hash and recompute the digest from the copied bytes. Keep the snapshot until
+   the host exits.
+
+4. Launch the spec's `java` (JDK 25 or later) from the project root, with exactly these arguments, each passed
+   directly to the executable:
+
+   ```text
+   -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enable-native-access=ALL-UNNAMED
+   -cp <ordered snapshot class path> org.julclang.state.host.DevHost --stdio
+   ```
+
+   Never add the project's JVM options. `--stdio` is the only argument the host accepts.
+
+</Steps>
+
+The digest is the SHA-256 of the concatenation of one UTF-8 line per file. Entries come in ordinal order, and a
+directory's files are sorted by the unsigned UTF-8 bytes of their relative paths. Each line ends with a line feed. A
+jar is one line with an empty path, so its line ends in `jar ` (with the space) before the line feed:
+
+```text
+<lowercase hex sha256> <decimal ordinal> <dir or jar> <relative path>\n
+```
+
+The host computes the same digest from its real class path in `initialize`, so a snapshot changed after you checked it
+is refused with `bad/stageMismatch`. In the playground, see `snapshotLaunch` and `launchGradleHost` in `gradle.js`.
+
+</TabItem>
+<TabItem label="npm project">
+
+<Aside type="caution">
+
+The npm path runs JOUST as Wasm built with GraalVM Web Image, which is experimental.
+
+</Aside>
+
+<Steps>
+
+1. Build the project with its installed `joust build`. The host reads `build/joust/contracts.json`.
+
+2. Check that the real paths of `node_modules/@julclang/joust`, its `bin/joust-host.js` and the installed
+   `@julclang/joust-runtime` are inside the project.
+
+3. Launch the project-local entry from the trusted project root:
+
+   ```sh
+   node node_modules/@julclang/joust/bin/joust-host.js --stdio
+   ```
+
+   The host refuses to start (exit status 2) under `NODE_OPTIONS` or a preload option (`--require`, `--import`,
+   `--loader`). If one of its own modules is missing or outside the project, it writes one error frame with
+   `"id": null` (`bad/stageMismatch` or `unsupported/outsideProject`) and exits with status 1 before reading any
+   request: expect that frame.
+
+4. In `initialize`, set `build.snapshot` to the absolute project root and `build.digest` to the npm fingerprint.
+
+</Steps>
+
+The npm fingerprint is one directory entry at ordinal 0 over these files, each named by its real path relative to the
+project root, sorted by UTF-8 bytes, one `<sha256> 0 dir <path>` line each ending with a line feed, then hashed with
+SHA-256:
+
+- `build/joust/contracts.json`
+- `node_modules/@julclang/joust-runtime/`: `package.json`, `src/service.js`, `src/host-service.js`, `src/exnref.js`,
+  `engine/joust-runtime.js`, `engine/joust-runtime.js.wasm`
+- `node_modules/@julclang/joust/`: `package.json`, `bin/joust-host.js`, and `src/host/frames.js`, `guard.js`,
+  `launch.js`, `resolve.js`, `transport.js`, `worker.js`
+
+The entry reads its JavaScript closure into memory once at launch and runs only those bytes. A changed file later is a
+fingerprint mismatch (`bad/stageMismatch`); a module outside the project is `unsupported/outsideProject`. The
+playground's `npmFingerprint` and `launchNpmHost` in `host.js` do this.
+
+</TabItem>
+</Tabs>
+
+For either host, pass only an allow-listed environment: `PATH`, `HOME`, `LANG`, `LC_*`, and on Windows `USERPROFILE`,
+`SystemRoot`, `TEMP` and `TMP`. Drain stderr continuously into a bounded buffer: it carries diagnostics and the
+host's one-line reason when it stops. Never start a host to pick a project or a network.
+
+### Transport
+
+Each direction carries JSON-RPC 2.0 messages, one per frame, in the LSP base framing:
+
+```text
+Content-Length: <body bytes>\r\n\r\n<UTF-8 JSON body>
+```
+
+| Rule | Value |
+| --- | --- |
+| Headers | `Content-Length` exactly once (case-insensitive name); `Content-Type` optional; nothing else |
+| Header size | At most 1,024 bytes, delimiter included |
+| Body size | At most 4,194,304 bytes, both directions |
+| Frame time | Header and body within 10 seconds of the frame's first byte; no limit between frames |
+| JSON depth | More than 1,000 levels is malformed |
+| Calls | One at a time. A second call while one runs gets `bad/busy`. Forward IDs are strings or integers |
+| Reverse requests | Only `chain/read`, only during a call, with string IDs `"<generation>.<sequence>"` (such as `"4.1"`) |
+| Cancellation | The notification `$/cancelRequest` with `{ "id": … }`. The host answers the call at once with `internal/cancelled` (JSON-RPC −32800). If the execution is still running two seconds later, the host exits; until it stops, other calls get `bad/busy`. A call past `callDeadlineMs` ends the same way, with `internal/deadline` |
+| End | `shutdown` (a request), then the `exit` notification |
+
+On Linux and macOS the JVM host moves file descriptor 1 before it loads any project class, so stray output from the
+project, its libraries or native code goes to stderr. On Windows it redirects Java's standard output only, and relies
+on your strict frame parser.
+
+Fail closed. A malformed frame, an unsolicited or second response, a reverse request outside a call, stray bytes or
+end of output during a call is a protocol violation: discard the call's result and stop the host. Also enforce your own
+hard timeout per call, and keep reading the host's output (the host ends the session when one of its frames cannot be
+written within 10 seconds). A host that exits has lost its session state, whatever its exit status.
+
+### The handshake
+
+The first request must be `initialize`:
+
+```json
+{
+  "protocol": [1],
+  "network": { "networkId": 0, "protocolMagic": 42, "mainnet": false },
+  "clock": { "zeroSlot": 0, "zeroTimeMs": 1700000000000, "slotLengthMs": 1000 },
+  "time": { "maxTtlSlots": 900, "settlementSlots": 60, "maxNowAheadSlots": 900 },
+  "limits": { "callDeadlineMs": 60000, "readsPerCall": 256, "readBytesPerCall": 33554432 },
+  "build": { "snapshot": "/private/snapshots/example", "digest": "<sha256>" },
+  "restoring": false
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `protocol` | The versions you speak; the host picks the highest common one |
+| `network` | Network ID 1 (mainnet) needs `"mainnet": true`. Check `protocolMagic` against your node yourself |
+| `clock` | The slot clock the host converts times with; it never reads the machine clock |
+| `time` | The largest TTL you accept, the settlement depth, and how far `now` may run ahead of a chain point, all in slots |
+| `limits` | Per call: the deadline, the number of reverse reads and the bytes of their answers |
+| `build` | The snapshot path (Gradle) or project root (npm), and the digest you verified |
+| `restoring` | `true` after a restart, when journaled transactions need reconciling (see `restore`) |
+
+The host checks the digest against its real class path or closure, then its JOUST runtime version, before it loads
+the project. It answers with:
+
+| Field | Content |
+| --- | --- |
+| `protocol`, `fingerprint`, `network` | The chosen version, the fingerprint it computed, your network echoed |
+| `capabilities` | `objects` and `quorum` (both hosts), `views` (named views; JVM host only), plus `keyed` and `maps` when a served contract uses keyed objects or MerkleMaps |
+| `reads` | The `chain/read` kinds it may send |
+| `versions` | `build` (null for Gradle builds) and `engine` (`joust`, `julc` and others; null where unknown) |
+| `contracts` | Each contract's `name`, its `scriptHashes`, and `served: true` or an `unsupported` code (such as `"params"`) |
+
+Compare `fingerprint` with the digest you sent. The playground stops the session when they differ.
+
+### Methods
+
+| Family | Method | Parameters | Result |
+| --- | --- | --- | --- |
+| Inspect | `describe` | `contract` (fully qualified name) | `description`, `messages`, and `calls` with each method's `kind` and `served` or an `unsupported` code |
+| Inspect | `deployment` | `now`, `contract` | `addresses`, `policies`, `scriptHashes`, `referenceScripts`, `governors` |
+| Inspect | `view` | `now`, `contract`, `instance`, `view`, `args` | `{ value }`; `view: null` returns the decoded state |
+| Inspect | `instances`, `objects` | `now`, `contract`, (`instance`), `limit` (1 to 500) | `listing`, `items`, `next`; later pages pass `listing`, `after`, `limit` |
+| Inspect | `decode` | `contract`, `datum` (hex CBOR) | The type and value, or `ambiguous` |
+| Deploy | `prerequisites` | `now`, `contract` | The missing components, in publication order |
+| Deploy | `publish` | `now`, `ttlSlots`, `contract`, `prerequisite`, `address` | `{ prepared }`, or null when already satisfied |
+| Call | `prepare` | `now`, `ttlSlots`, `call` | `prepared` (the unsigned transaction) and `predicted` (its expected effects) |
+| Settle | `settled` | `reservation`, `txHash`, `status`, `tip`, and `slot` for `confirmed` | The reservation's state |
+| Settle | `registered` | `credential`, `evidence` | `{}` |
+| Settle | `restore` | `transactions`, `complete` | The reservation IDs, in order |
+| Settle | `reset` | `now`, optional `clock`, optional `rewound` | `{}` |
+| Session | `shutdown`, `exit` | none | `{}` for `shutdown`; `exit` is a notification and the process exits |
+
+A `call` names `contract`, `kind`, `method`, `instance`, `object`, `args`, `pay`, `address` (the payer's address), and
+`cosigners` for quorum methods. Arguments use the contract description's JSON encoding (see
+[Contract description](/reference/description-format/)). The host serves the kinds `init`, `action`, `destroy`,
+`ownedInit`, `ownedAction`, `ownedDestroy`, `keyedInit`, `keyedAction`, `keyedRemove` and `keyedRetire`; the calls
+listed [above](#do-you-need-to-touch-it) are refused.
+
+Keyed calls add `designated` (a lovelace-only wallet input the client chooses), `operation` (a record the client
+persists before the first request) and optional `pageLimits`. For `keyedAction`, `keyedRemove` and `keyedRetire`,
+`object` is the logical key in lowercase hex; an insert returns its key in `prepared.object`. The protocol's
+[keyed calls](https://github.com/bloxbean/joust/blob/main/docs/protocol/dev-host-1.md#keyed-calls) section has the
+retry rules.
+
+`prepared` carries `reservation`, `cbor`, `txHash`, `validFrom`, `validTo` (exclusive), `signers` and `plan`, plus the
+new `instance` or `object` for a creation. Every item of `predicted` has `predicted: true`: it is the host's claim, not
+something to sign on.
+
+### Time and reservations
+
+Time comes only from you. `now`, `ttlSlots`, `validFrom`, `validTo` and the `tip` and `slot` of `settled` are integer
+slots in the clock you sent. (A `chain/read` answer's `tip` is an object, `{ slot, hash, height }`; `settled.tip` is
+just the slot.) Each call's `now` must not go below an earlier call's until a `reset`, and `ttlSlots` must fit
+`maxTtlSlots`.
+
+The host reserves the spending and collateral inputs of each prepared body, so a second build does not spend them
+again:
+
+| You report, or a tip shows | The reservation |
+| --- | --- |
+| `settled` with `discarded` (a body you will not hand out) | Released at once |
+| `settled` with `confirmed` and its inclusion `slot` | Kept until a tip passes the inclusion slot plus `settlementSlots`, then released |
+| `settled` with `rolledBack` | Kept; the body may still land |
+| Nothing: an unreported body | Released once a tip passes its `validTo` plus `settlementSlots` |
+
+Before you hand out any body (for signing, export or submission), persist per chain the highest `validTo` plus
+`settlementSlots` you have handed out, separately from your journal. After a restart, initialize with
+`restoring: true` and replay your journal through `restore`. If you lost the journal, do not complete `restore` until
+an observed tip passes that persisted bound.
+
+### Chain reads
+
+The host never reads the chain itself. During a call it sends `chain/read` requests, and only you answer them, from
+your node or provider:
+
+| Kind | Request | Value | `absent` means |
+| --- | --- | --- | --- |
+| `utxos` | `address`, optional `cursor` | Unspent outputs at the address, in provider order; add `more` (a cursor) to every chunk but the last | No outputs |
+| `output` | `ref` (`txHash#index`) | One output, possibly spent | Unknown |
+| `tip` | none | The chain point | – |
+| `protocolParams` | none | The latest protocol parameters, with the cost models | – |
+| `script` | `hash` | `type` (`PlutusScriptV1`, `PlutusScriptV2` or `PlutusScriptV3`) and `cborHex` | Unknown |
+| `stakeRegistration` | `credential` | `registered` (boolean); answer `unsupported` when you cannot tell | – |
+| `assetHistory` | `unit`, optional `cursor` | Every transaction carrying the unit (map contracts only) | No history |
+| `redeemers` | `txHash` | That transaction's redeemers (map contracts only) | Unknown transaction |
+| `datum` | `hash` | The datum's exact CBOR (map contracts only) | Unknown |
+
+Every answer has `tip: { slot, hash, height }` and exactly one of `value`, `absent: true`, `unsupported: true` or
+`failed: { message }`. Send `failed` for a provider failure, never an empty value: the host treats "not there" and
+"could not ask" differently. A UTxO uses the fields `tx_hash`, `output_index`, `address`, `amount`, `data_hash`,
+`inline_datum` and `reference_script_hash`. Protocol parameters are cardano-client-lib's `ProtocolParams` JSON, with
+snake_case fields such as `min_fee_a`, `min_fee_b`, `coins_per_utxo_size` and `cost_models`; the `protocolParams` of
+[`fixtures/host/verifier/Bank-init.json`](https://github.com/bloxbean/joust/blob/main/fixtures/host/verifier/Bank-init.json)
+is a complete example. The host checks addresses, references, duplicates and script hashes, and refuses a chain point
+that goes backwards within a call. Each exchange counts towards `readsPerCall`, and each answer's bytes towards
+`readBytesPerCall`. The `reads` schema has every kind's exact shape.
+
+### A worked exchange
+
+These are frame bodies from the recorded Bank session (`fixtures/host/sessions/bank.json`), after a successful
+`initialize`. Long values are shortened with `…`. The client asks for a Bank creation:
+
+```json
+{"jsonrpc":"2.0","id":9,"method":"prepare","params":{"now":1870,"ttlSlots":20,"call":{
+  "contract":"org.julclang.state.examples.bank.Bank","kind":"init","method":"init",
+  "address":"addr_test1qq2ydkrksjvjt39krul5lpd7crvlch0e9g4zmw6k3q8ffh4hm8u0pzxrxhf28nh0fe59xv7aaqddt8d2w0w0uzppfnzqstq8h0",
+  "args":{"withdrawLimit":"30000000"}}}}
+```
+
+The host asks for the contract address's UTxOs, under the call's first reverse ID:
+
+```json
+{"jsonrpc":"2.0","id":"9.1","method":"chain/read","params":{"kind":"utxos",
+  "address":"addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy"}}
+```
+
+The client answers from its chain:
+
+```json
+{"jsonrpc":"2.0","id":"9.1","result":{
+  "tip":{"slot":1870,"height":78,"hash":"36c39e20ce594137b058e42d7f3f471fdff40e06fac87fc77c87421fddf6aefe"},
+  "value":[{"tx_hash":"659ecb42a26b6a91c4e84854d96a279c8bd23c92cdd7a6889ea29be2bfb484c0","output_index":0,
+    "address":"addr_test1wrp6e300jwk22nphnklqx5j0wsj57qjcrfv4djf05xkuvug25n5yy",
+    "amount":[{"unit":"lovelace","quantity":29252050}],"data_hash":null,"inline_datum":null,
+    "reference_script_hash":"c3acc5ef93aca54c379dbe03524f74254f02581a5956c92fa1adc671"}]}}
+```
+
+More reads follow (`9.2` for the payer's UTxOs, then `protocolParams` and `output` reads). Then the host answers the
+call:
+
+```json
+{"jsonrpc":"2.0","id":9,"result":{
+  "prepared":{"reservation":"2","cbor":"…","txHash":"e549db71adc9c22706e18591d4ae4f4dcb0994f09639fc92d0d812c62acb9de9",
+    "validFrom":1870,"validTo":1890,"signers":["1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de"],
+    "instance":"dc161c1e18134acd75fef3cdf8926e873571fa252056e57880aa5099cefb7963","plan":{…}},
+  "predicted":{"state":{"index":0,"instance":"dc161c1e18134acd75fef3cdf8926e873571fa252056e57880aa5099cefb7963",
+    "type":"State","value":{"admin":"1446d876849925c4b61f3f4f85bec0d9fc5df92a2a2dbb56880e94de","paused":false,
+    "withdrawLimit":"30000000"},"predicted":true},"objects":[],"events":[],"payouts":[],"sends":[]}}}
+```
+
+The client now checks `prepared` (below) before it shows it for signing, and reports the outcome with `settled`.
+
+### Errors
+
+A failed call is a JSON-RPC error whose `data` has `kind`, `code`, `message`, `sites` and `retryAtSlot`. Branch on
+`kind` and `code`, never on the message text.
+
+| Kind | JSON-RPC code | Some codes |
+| --- | --- | --- |
+| `bad` | −32602 | `request`, `busy`, `network`, `nowDecreased`, `stageMismatch`, `tooLarge`, `readLimit`, `listingGone`, `conflict` |
+| `refusal` | −32001 | `require` (the contract's `Require.that`, with `.jsc` `sites`), `pending`, `prerequisite`, `cooldown` (with `retryAtSlot`), `expiredOnArrival` |
+| `unsupported` | −32003 | `protocol`, `runtimeVersion`, `outsideProject`, `views`, `params`, `keyed`, `authorizedBy`, `unverifiable`, `read:<kind>` |
+| `internal` | −32603 (−32800 for `cancelled`) | `readFailed`, `inconsistentRead`, `unbalanced`, `evaluator`, `tooDeep`, `cancelled`, `deadline` |
+
+The error schema lists every code. A few behaviours differ between the hosts: a trap in the Node host's engine ends
+that host after its answer, and a transition that runs out of execution budget there is `internal/evaluator` (the JVM
+host runs the contract's Java method, which has no budget).
+
+### Trust and signing
+
+The client trusts the user, the project the user chose to open, its own node or provider, and its own journal. It
+does **not** trust the host's answers. A host bug, or project code, could return a transaction that does something
+other than what the call asked. So before signing or exporting a prepared transaction, the client checks it
+independently. The protocol's "Client signing rules" are normative. In short:
+
+- hash the received body bytes (never a re-encoding) and compare with `txHash`;
+- take descriptions, scripts, addresses and policies from the snapshot you verified, never from the host;
+- resolve every input against your own node, and refuse anything the call did not ask for: extra certificates,
+  withdrawals, mints, signers, redeemers or outputs;
+- check the redeemer, the continuing output, the wallet's net outflow, the validity window and the fee cap.
+
+In JavaScript, `verifyHostResult` from `@julclang/state-client` applies these rules. It is a port of the conformance
+kit's reference checker and agrees with it on every conformance vector. Its input has the shape of a conformance
+vector: your request, anchors, resolved inputs and protocol parameters, plus the host's `result`. It returns
+`{ problems, sites, report }`; empty `problems` means the body may be shown for review and signed. The playground's
+page calls it before every signature.
+
+### Conformance
+
+The conformance kit is the `conformance` classifier of `org.julclang:julc-state-host`, at the host version you
+support. It contains:
+
+| Part | Use |
+| --- | --- |
+| `ReferenceChecker` | The reference signing checker: run it on a `verifier/*.json` vector; it prints the violation codes (`[]` for a positive) |
+| `FakeHost` | A scripted stdio host that replays a recorded session against your client (`sessions/bank.json` by default, or `sessions/keyed.json`) |
+| `sessions/violation-*.json` | Host faults your client must treat as protocol violations and stop on |
+| `verifier/*.json` | Positive and negative signing vectors, each negative naming the one check that refuses it |
+
+```sh
+jar xf "$lib"/julc-state-host-*-conformance.jar verifier sessions
+java -cp "$lib/*" org.julclang.state.host.conformance.ReferenceChecker verifier/dapp-0015.json
+java -XX:+DisplayVMOutputToStderr -Xlog:disable -Xlog:all=warning:stderr --enable-native-access=ALL-UNNAMED \
+  -cp "$lib/*" org.julclang.state.host.conformance.FakeHost --stdio sessions/bank.json
+```
+
+Here `lib` is a directory holding the kit and its dependencies; the conformance document shows a Gradle task that
+copies them. The recorded sessions test transport only: also feed each `prepared` result to your own verifier and
+compare it with its vector. In this repository, `js/state-client/test/hostcheck.test.js` runs `verifyHostResult`
+against every vector, and `./gradlew :julc-state-host:nodeHostConformance` (after packaging both Web Images) checks
+the npm host against the same kit.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="The playground" href="/apps/playground/" description="The dev host's client in this repository." />
+  <LinkCard title="Gradle builds" href="/apps/gradle-builds/" description="The plugin, its tasks and joustHostSpec." />
+  <LinkCard title="Contract description" href="/reference/description-format/" description="The JSON encoding of arguments, state and views." />
+  <LinkCard title="Java runtime API" href="/reference/java-runtime-api/" description="julc-state-serve and julc-state-host." />
+</CardGrid>

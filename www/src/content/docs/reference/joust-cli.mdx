@@ -35,9 +35,10 @@ Every command reads `joust.config.json` from the working directory (see [`joust.
 | `joust serve` | `--network <name>`, `--dir <dir>` (default `dist`), `--port <port>` (default as `dev`) | serves a built page as static files, with the chain API at `/chain` and on DevKit the faucet |
 | `joust version` | (also `joust --version`, `-V`, `-v`) | prints `joust <version> (npm)` |
 | `joust help` | (also `--help`, `-h`, `<command> --help`) | the usage; never runs a command |
+| `joust playground` | `--mode offline\|devkit` (default `offline`), `--network <name>` (with `--mode devkit`), `--port <port>`, `--accept-abi`, `--accept-lock`, `--no-open` | builds, then opens a browser playground for every contract: test identities, a form per call, an offline ledger or Yaci DevKit. In a Gradle project it runs `./gradlew build joustHostSpec` and the JVM dev host. See [The playground](/apps/playground/) |
 | `joust new` | | prints the `npm create joust` command to run (Gradle projects come from the native `joust`); creates nothing |
 
-In a project, a project command (`build`, `test`, `deploy`, `dev`, `serve`) runs at the project's root (the nearest directory
+In a project, a project command (`build`, `test`, `deploy`, `dev`, `serve`, `playground`) runs at the project's root (the nearest directory
 with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`), and by the project's own
 `@julclang/joust`: a global or other copy hands over to it, as [the native `joust`](#the-native-joust) does.
 
@@ -60,7 +61,7 @@ with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`)
 
 ### Offline tests
 
-`@julclang/joust/test` runs a project's contracts without a chain (ADR-0018 D14):
+`@julclang/joust/test` runs a project's contracts without a chain:
 
 ```js
 import { offline } from '@julclang/joust/test';
@@ -208,7 +209,7 @@ above).
 
 ## The native `joust`
 
-ADR-0017 adds a native `joust` (no Node, no JDK needed to run it): `brew install bloxbean/tap/joust`, or the release
+The native `joust` needs no Node and no JDK to run: `brew install bloxbean/tap/joust`, or the release
 archives (macOS arm64, Linux x86_64 and arm64). It creates projects and hands project commands to the project:
 
 | Command | Native `joust` |
@@ -218,6 +219,7 @@ archives (macOS arm64, Linux x86_64 and arm64). It creates projects and hands pr
 | `joust help`, `<command> --help` | the usage; never runs a command |
 | any other command, in an npm project | the project's own `@julclang/joust` (`node_modules`), at the project's root, with the arguments unchanged and its exit code; `run npm install first` if it is missing, never a stand-in |
 | `joust build`, `test`, `run`, in a Gradle build | the build's `./gradlew <task>` (a subproject's directory selects the subproject); `deploy`, `dev` and `serve` explain that they are npm commands |
+| `joust playground`, in a Gradle build | the `@julclang/joust` of this `joust`'s own version, installed once into `~/.joust/playground/<version>` (needs Node 22), over `./gradlew build joustHostSpec` and the JVM dev host; never a copy from the project |
 
 Both `joust` commands answer `new`, `version` and `help` themselves, and both hand project commands to the project's
 own `@julclang/joust`. So `joust build` does the same, whichever binary `PATH` finds. Install the native one globally and
@@ -233,7 +235,7 @@ reports that it found no project.
 
 To check a downloaded archive before using it: `shasum -a 256 -c joust-<version>-SHA256SUMS.txt --ignore-missing`, then
 `gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust`; on macOS, `xattr -d com.apple.quarantine joust`
-(the binary is not notarized; Homebrew installs need none of this).
+(the binary is not notarised; Homebrew installs need none of this).
 
 ## `create-joust`
 
@@ -242,8 +244,8 @@ npm create joust@latest [dir] -- [--template node|web] [--lang jsc|java]
 ```
 
 Writes a new project into `dir` (default `joust-app`), which must be empty or absent, and names the package after the
-folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, a DevKit test
-(`test/counter.test.js`) and `.gitignore`.
+folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, an offline test
+(`test/counter.test.js`, run by `npm test`), the same calls on DevKit (`test/devkit/counter.test.js`) and `.gitignore`.
 
 | Option | Values |
 |---|---|
