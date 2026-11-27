@@ -1,5 +1,6 @@
 // The docs' sidebar: the site's order, which the AI artifacts (llms.txt, llms-full.txt) follow too.
 // Java (with cardano-client-lib) is the first-class path; the npm path (GraalVM Web Image) is experimental.
+// Experimental is said once per page (an Aside at its top) and in the JavaScript groups' labels, not as item badges.
 export const SIDEBAR = [
   {
     label: 'Start here',
@@ -9,7 +10,7 @@ export const SIDEBAR = [
       { label: 'Install JOUST', slug: 'start/install' },
       { label: 'Quick start: Java & Gradle', slug: 'start/quick-start-java' },
       { label: 'Your first contract', slug: 'start/first-contract' },
-      { label: 'Quick start: JavaScript & TypeScript', slug: 'start/quick-start-npm', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'Quick start: JavaScript & TypeScript', slug: 'start/quick-start-npm' },
     ],
   },
   {
@@ -28,10 +29,10 @@ export const SIDEBAR = [
     ],
   },
   {
-    label: 'Tutorials: JavaScript',
+    label: 'Tutorials: JavaScript (experimental)',
     items: [
-      { label: 'A counter dApp in the browser', slug: 'tutorials/counter-dapp', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'Deploy to preview', slug: 'tutorials/deploy-preview', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'A counter dApp in the browser', slug: 'tutorials/counter-dapp' },
+      { label: 'Deploy to preview', slug: 'tutorials/deploy-preview' },
     ],
   },
   {
@@ -67,19 +68,19 @@ export const SIDEBAR = [
   {
     label: 'Tools',
     items: [
-      { label: 'The playground', slug: 'apps/playground', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'The dev host', slug: 'apps/dev-host', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'The playground', slug: 'apps/playground' },
+      { label: 'The dev host', slug: 'apps/dev-host' },
     ],
   },
   {
-    label: 'Building apps: JavaScript',
+    label: 'Building apps: JavaScript (experimental)',
     items: [
-      { label: 'JavaScript clients', slug: 'apps/javascript-clients', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'Wallets', slug: 'apps/wallets', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'Pages: worker, Vite, static builds', slug: 'apps/pages', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'The joust CLI and projects', slug: 'apps/cli-and-projects', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'Networks and chain providers', slug: 'apps/networks-and-providers', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'Keyed objects in JavaScript', slug: 'apps/keyed-objects-js', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'JavaScript clients', slug: 'apps/javascript-clients' },
+      { label: 'Wallets', slug: 'apps/wallets' },
+      { label: 'Pages: worker, Vite, static builds', slug: 'apps/pages' },
+      { label: 'The joust CLI and projects', slug: 'apps/cli-and-projects' },
+      { label: 'Networks and chain providers', slug: 'apps/networks-and-providers' },
+      { label: 'Keyed objects in JavaScript', slug: 'apps/keyed-objects-js' },
       { label: 'MerkleMap mirrors', slug: 'apps/map-mirrors' },
     ],
   },
@@ -90,7 +91,7 @@ export const SIDEBAR = [
       { label: '.jsc', slug: 'languages/jsc', badge: { text: 'Preview', variant: 'caution' } },
       { label: '.jsc reference', slug: 'languages/jsc-reference' },
       { label: '.jsc standard library', slug: 'languages/jsc-std' },
-      { label: 'TypeScript', slug: 'languages/typescript', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: 'TypeScript', slug: 'languages/typescript' },
       { label: 'Editors', slug: 'languages/editors' },
     ],
   },
@@ -103,12 +104,12 @@ export const SIDEBAR = [
     ],
   },
   {
-    label: 'Reference: JavaScript',
+    label: 'Reference: JavaScript (experimental)',
     items: [
-      { label: '@julclang/state-client', slug: 'reference/state-client', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: '@julclang/joust-runtime', slug: 'reference/joust-runtime', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: '@julclang/joust (CLI, Vite)', slug: 'reference/joust-cli', badge: { text: 'Experimental', variant: 'caution' } },
-      { label: 'joust.config.json', slug: 'reference/config', badge: { text: 'Experimental', variant: 'caution' } },
+      { label: '@julclang/state-client', slug: 'reference/state-client' },
+      { label: '@julclang/joust-runtime', slug: 'reference/joust-runtime' },
+      { label: '@julclang/joust (CLI, Vite)', slug: 'reference/joust-cli' },
+      { label: 'joust.config.json', slug: 'reference/config' },
     ],
   },
   {
