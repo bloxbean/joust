@@ -88,8 +88,8 @@ cd my-app
 yaci-devkit up --enable-yaci-store
 ./gradlew run             # the counter on DevKit`;
 
-export const START_NPM = `npm create joust@latest my-app
-cd my-app && npm install  # or: joust new my-app -t node
+export const START_NPM = `npm create joust@latest my-app   # or: joust new my-app -t node
+cd my-app && npm install
 npm test                  # build, then offline tests
 yaci-devkit up --enable-yaci-store
 npm start                 # deploy and run on DevKit`;

@@ -30,12 +30,16 @@ pluginManagement {
 rootProject.name = 'my-counter'
 ```
 
-Plugins in the `org.julclang` groups (JOUST's) come from the BloxBean release repository and from nowhere else.
+Plugins in the `org.julclang` groups (JOUST's) come from the BloxBean release repository and from nowhere else. This
+block replaces Gradle's default plugin repository: to use other plugins (foojay, Spotless and so on), add
+`gradlePluginPortal()` after `exclusiveContent`.
 
 ```groovy title="build.gradle"
 plugins {
     id 'application'
-    id 'org.julclang.joust' version '<version>'    // a JOUST release; upgrading JOUST is this version
+    // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+    // Upgrading JOUST is this version.
+    id 'org.julclang.joust' version '<version>'
 }
 
 repositories {
@@ -51,7 +55,8 @@ application {
 }
 ```
 
-`joust new` fills in the version of the `joust` that runs it. To upgrade JOUST, change that version to the newest
+`joust new` fills in the version of the `joust` that runs it, on the plugin line (the comment above it records the
+version the project was created with). To upgrade JOUST, change the plugin line's version to the newest
 release whose tag starts with `v` on the [releases page](https://github.com/bloxbean/joust/releases) (or
 `npm view @julclang/joust version`; each release publishes the npm packages at the same version). Every other
 version comes from the JOUST release the plugin belongs to, so the JuLC and cardano-client-lib versions always match.
@@ -85,7 +90,7 @@ subproject's directory selects the subproject); see [the native `joust`](/refere
 <TabItem label="BloxBean release repository">
 
 Every release is published to `https://repo.bloxbean.org/maven/releases`, with the JuLC it needs; that is the
-repository `joust new` configures. Use as `<version>` the newest release whose tag starts with `v` on the
+repository `joust new` configures. Recent releases are on Maven Central too. Use as `<version>` the newest release whose tag starts with `v` on the
 [releases page](https://github.com/bloxbean/joust/releases) (not the "Development snapshot" entry), without the `v`.
 The quickest check is `npm view @julclang/joust version`, since each release publishes the npm packages at the same
 version.
@@ -98,13 +103,19 @@ To try what is on `main` before it is released, publish the library modules of y
 ```sh
 git clone https://github.com/bloxbean/joust.git
 cd joust
-./gradlew publishToMavenLocal
-grep '^version' gradle.properties            # the JOUST version you just published
-grep '^julc ' gradle/libs.versions.toml     # and the JuLC version it needs
+./gradlew publishToMavenLocal -Pversion=<version>-local   # a version no release uses
+grep -m1 '^julc ' gradle/libs.versions.toml              # the JuLC version it needs
 ```
 
-This publishes `julc-state-api` (with its `onchain` jar), `-processor`, `-runtime`, `-testkit`, `-verifier`, `-dsl`
-and `-server`. Add `mavenLocal()` to the repositories below.
+This publishes `julc-state-api` (with its `onchain` jar), `-processor`, `-runtime`, `-testkit`, `-verifier`, `-dsl`,
+`-serve`, `-host`, `-server`, and the Gradle plugin `org.julclang.joust`. Without `-Pversion`, it publishes under the
+version in `gradle.properties`, which is usually a released version: the unreleased code in `~/.m2` would then shadow
+that release in every build that lists `mavenLocal()`.
+
+To use it, keep the plugin build and add `mavenLocal()` to both repository lists: in `settings.gradle`'s
+`pluginManagement`, inside `forRepositories(...)` (only the listed repositories may serve `org.julclang`), and in
+`build.gradle`'s `repositories`. Set the plugin line to the version you published. The build files
+[below](#the-build-files-by-hand) work too.
 
 </TabItem>
 </Tabs>
@@ -204,6 +215,9 @@ What each line on the annotation processor path is for:
 | `julc-state-processor` | The JOUST processor: generates `<Name>Validator`, `<Name>Client` and the description |
 | `julc-annotation-processor` | JuLC's processor: compiles the generated validator to UPLC in the next round |
 | `julc-state-api:<version>:onchain` | The `julc-state-api` **sources**, under `META-INF/plutus-sources/`. JuLC compiles against its own on-chain API plus library sources it finds on the processor path; without these it cannot see `Ctx`, `Require`, `Payouts` and the rest |
+
+This build is Java only and has no playground: it adds no `generateJsc` (so `.jsc` contracts are not compiled) and no
+`joustHostSpec` (which `joust playground` runs). Use the plugin for those.
 
 The source files are the ones `joust new` writes; [Quick start: Java & Gradle](/start/quick-start-java/#what-joust-new-wrote)
 shows each of them.

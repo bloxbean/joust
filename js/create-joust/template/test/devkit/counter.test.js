@@ -1,5 +1,5 @@
 // Counter on a local Yaci DevKit (yaci-devkit up --enable-yaci-store), after `npm run build` and `npm run deploy`:
-// node --test test/devkit/. The offline test (test/counter.test.js) runs the same calls with no chain.
+// node --test 'test/devkit/*.test.js'. The offline test (test/counter.test.js) runs the same calls with no chain.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

@@ -61,7 +61,7 @@ Two readers, often the same person on different days:
   `https://repo.bloxbean.org/maven/releases`, with the JuLC they need (recent releases are on Maven Central too). `joust new`
   (the native `joust`, from Homebrew `bloxbean/tap/joust` or a release's archives) writes a project whose
   `build.gradle` applies the Gradle plugin `org.julclang.joust`, which adds every dependency at matching versions.
-  Dependencies by hand: see the [Java quick start](/start/quick-start-java/) and any `examples/<name>/build.gradle`.
+  Dependencies by hand: see [Gradle builds](/apps/gradle-builds/) and any `examples/<name>/build.gradle`.
 - **npm path (experimental):** Node 22 or newer, no JDK, no GraalVM. The npm packages (`@julclang/joust`,
   `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are on npmjs.org:
   `npm create joust@latest my-app`. They run JOUST's toolchain and runtime as Wasm built with GraalVM Web Image, itself experimental: say so in

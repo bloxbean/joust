@@ -63,12 +63,14 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    The directory must be new or empty. It holds a `Counter` contract, its tests, a small app that runs it on DevKit,
    and the Gradle wrapper ([what it wrote](#what-joust-new-wrote)).
 
-2. **Check the JOUST version.** `build.gradle` names it once, on the plugin line:
+2. **Check the JOUST version.** It is the version on the plugin line of `build.gradle`:
 
    ```groovy title="build.gradle"
    plugins {
        id 'application'
-       id 'org.julclang.joust' version '<version>'    // a JOUST release; upgrading JOUST is this version
+       // JOUST <version>: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+       // Upgrading JOUST is this version.
+       id 'org.julclang.joust' version '<version>'
    }
    ```
 
@@ -113,7 +115,7 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    ```
 
    `CounterMain` funds two fresh accounts from the DevKit faucet, deploys a counter as Alice, increments it as Bob and
-   Alice, shows Bob's reset being refused before anything is submitted, and closes the counter:
+   Alice, shows Bob's reset being refused before anything is submitted, and closes the counter (hashes shortened):
 
    ```text
      [joust] deploy Counter: submitted 34ba07cb…
@@ -126,8 +128,9 @@ You need three things; [Install JOUST](/start/install/) covers each one.
    closed in c4419d0b…
    ```
 
-   Your hashes will differ. The first run on a fresh DevKit also logs `published the Counter reference script in
-   ...`: the first deploy of a contract on a network publishes its script once, for every later transaction to read.
+   Your hashes will differ. The first run on a fresh DevKit also logs `publish the Counter reference script: submitted
+   ...` and `published the Counter reference script in ...`: the first deploy of a contract on a network publishes its
+   script once, for every later transaction to read.
    Open the address in Yaci Viewer (`http://localhost:5173`) to see the state UTxOs and their datums.
 
 </Steps>
@@ -465,8 +468,9 @@ See [Examples](/reference/examples/).
 | Symptom | Cause and fix |
 |---|---|
 | `joust: command not found` | Install it ([Install JOUST](/start/install/)), or put the unpacked archive's `joust` on your `PATH` |
-| The build refuses the Java version | The project needs a Java 25 toolchain: install JDK 25 |
-| `Could not find org.julclang:julc-...` | The plugin version in `build.gradle` is not a JOUST release, or the BloxBean repository is missing: compare with the [releases page](https://github.com/bloxbean/joust/releases). For a hand-written build, see [Gradle builds](/apps/gradle-builds/#troubleshooting) |
+| `No matching toolchains found ... languageVersion=25` | The project needs a Java 25 toolchain: install JDK 25 |
+| `Plugin [id: 'org.julclang.joust', version: '...'] was not found` | The plugin version in `build.gradle` is not a JOUST release: compare it with the [releases page](https://github.com/bloxbean/joust/releases) |
+| `Could not find org.julclang:julc-...` | A repository is missing from the build. For a hand-written build, see [Gradle builds](/apps/gradle-builds/#troubleshooting) |
 | `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
 | Connection refused on `localhost:8080` or `:10000` | DevKit is not running: `yaci-devkit up --enable-yaci-store` |
 | `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in `Devnet`) |

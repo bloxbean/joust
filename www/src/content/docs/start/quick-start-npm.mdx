@@ -226,7 +226,7 @@ You will:
 
    ```sh
    npm test                              # joust test: builds, then runs test/*.test.js offline
-   node --test test/devkit/              # the same calls on DevKit, after npm run build and npm run deploy
+   node --test 'test/devkit/*.test.js'   # the same calls on DevKit, after npm run build and npm run deploy
    ```
 
    `test/counter.test.js` makes the same calls against an in-memory ledger, with no chain, and checks each result: the

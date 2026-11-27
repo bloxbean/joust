@@ -35,24 +35,27 @@ You can change your mind later: a contract compiles to the same validator and th
 1. **Install `joust`.**
 
    <Tabs>
-   <TabItem label="Homebrew (macOS, Linux)">
+   <TabItem label="Homebrew">
 
    ```sh
    brew install bloxbean/tap/joust
    ```
 
+   For Apple silicon Macs and Linux (x86_64, arm64). There is no native `joust` for Intel Macs: use the npm path there.
+
    </TabItem>
    <TabItem label="Release archive">
 
-   Download the archive for your platform (macOS arm64, Linux x86_64 or arm64) from the newest release on the
-   [releases page](https://github.com/bloxbean/joust/releases), unpack it and put `joust` on your `PATH`. To check
-   the download first:
+   Download `joust-<version>-<platform>.zip` for your platform (`<platform>` is `macos-aarch64`, `linux-x86_64` or
+   `linux-arm64`) from the newest release on the [releases page](https://github.com/bloxbean/joust/releases). Check it,
+   then unpack it and put `joust` on your `PATH`:
 
    ```sh
    shasum -a 256 -c joust-<version>-SHA256SUMS.txt --ignore-missing
    gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust
-   xattr -d com.apple.quarantine joust     # macOS only: the binary is not notarized
    ```
+
+   On macOS, also clear the quarantine flag, since the binary is not notarised: `xattr -d com.apple.quarantine joust`.
 
    </TabItem>
    <TabItem label="npm only">
@@ -74,6 +77,8 @@ You can change your mind later: a contract compiles to the same validator and th
    ```sh
    joust version          # joust <version> (native)
    ```
+
+   On the npm path, run `npx joust version` inside a project instead.
 
    Compare `<version>` with the newest release on the [releases page](https://github.com/bloxbean/joust/releases).
    `joust new` writes the version of the `joust` that runs it into the project, so upgrade before you create a

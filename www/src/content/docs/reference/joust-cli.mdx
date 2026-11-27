@@ -242,8 +242,8 @@ npm create joust@latest [dir] -- [--template node|web] [--lang jsc|java]
 ```
 
 Writes a new project into `dir` (default `joust-app`), which must be empty or absent, and names the package after the
-folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, a DevKit test
-(`test/counter.test.js`) and `.gitignore`.
+folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, an offline test
+(`test/counter.test.js`, run by `npm test`), the same calls on DevKit (`test/devkit/counter.test.js`) and `.gitignore`.
 
 | Option | Values |
 |---|---|
