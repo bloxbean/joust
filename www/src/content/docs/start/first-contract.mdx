@@ -230,7 +230,7 @@ which you commit beside the file. See [.jsc](/languages/jsc/).
 ## Build it
 
 ```sh
-./gradlew :examples:counter:build      # in a JOUST checkout; ./gradlew build in your own project
+./gradlew build                        # in a project from joust new; in a JOUST checkout: ./gradlew :examples:counter:build
 ```
 
 The processor writes `CounterValidator` and `CounterClient` into
@@ -282,7 +282,7 @@ System.out.println("alice closed the counter in " + closed.txHash() + ", paid ba
 ```
 
 ```sh
-./gradlew :examples:counter:run
+./gradlew :examples:counter:run        # the examples' CounterApp, in a JOUST checkout; your project's ./gradlew run runs CounterMain
 ```
 
 ```text
@@ -297,7 +297,7 @@ alice closed the counter in c4419d0b..., paid back [Payout[to=[B@78d39a69, lovel
 
 `DevKit` is the examples' helper for a local network: it builds the `StateRuntime` and funds fresh accounts from
 the faucet. In your own project you build the runtime yourself, as in the
-[quick start](/start/quick-start-java/#run-it-on-devkit).
+[quick start](/start/quick-start-java/#the-devkit-app).
 
 </TabItem>
 <TabItem label="JavaScript">

@@ -74,26 +74,25 @@ await instance.increment(wallet, { by: 0n });            // refused: "increment 
 
 export const NPM = `npm create joust@latest my-app
 cd my-app && npm install
-npm start          # contracts/ -> validator and typed client (no JDK); deploys to Yaci DevKit; runs index.js
+npm start          # build (no JDK), deploy to DevKit, run index.js
 
 npm create joust@latest my-web-app -- --template web
 cd my-web-app && npm install
 npm run dev        # deploys to Yaci DevKit, serves the page`;
 
-export const GRADLE = `// settings.gradle: the plugin comes from the BloxBean release repository
-pluginManagement {
-    repositories { maven { url = uri('https://repo.bloxbean.org/maven/releases') } }
-}
+// Get started: the joust command, then the project's own build (joust new writes the Gradle wrapper).
+export const START_GRADLE = `brew install bloxbean/tap/joust
+joust new my-app          # Java; -l jsc for .jsc
+cd my-app
+./gradlew build           # validator, client, tests
+yaci-devkit up --enable-yaci-store
+./gradlew run             # the counter on DevKit`;
 
-// build.gradle (joust new writes both files)
-plugins {
-    id 'application'
-    id 'org.julclang.joust' version '<version>'   // github.com/bloxbean/joust/releases
-}
-repositories {
-    mavenCentral()
-    maven { url = uri('https://repo.bloxbean.org/maven/releases') }   // JOUST, JuLC
-}`;
+export const START_NPM = `npm create joust@latest my-app
+cd my-app && npm install  # or: joust new my-app -t node
+npm test                  # build, then offline tests
+yaci-devkit up --enable-yaci-store
+npm start                 # deploy and run on DevKit`;
 
 // The Java client: generated from Counter.java, on cardano-client-lib (examples/counter's CounterApp does the same).
 export const JAVA_CLIENT = `// A runtime over any cardano-client-lib backend: Blockfrost, Yaci Store, ...

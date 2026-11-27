@@ -1,9 +1,10 @@
 ---
 // The JOUST landing page: Java (with cardano-client-lib) first; the npm path in its own, experimental, section.
+// Getting started goes through the joust command (joust new), never through a JOUST checkout.
 import { Code } from 'astro:components';
 import '../styles/landing.css';
 import { SITE } from '../../site.config.mjs';
-import { JAVA, JAVA_CLIENT, JSC, JS, GRADLE, NPM } from '../components/landing/samples.mjs';
+import { JAVA, JAVA_CLIENT, JSC, JS, NPM, START_GRADLE, START_NPM } from '../components/landing/samples.mjs';
 import mark from '../assets/joust-emblem.svg?raw';
 import overviewSvg from '../assets/diagrams/joust-overview.svg';
 import sameMethodSvg from '../assets/diagrams/same-method.svg';
@@ -65,7 +66,7 @@ const ecosystem = [
         <a href="/ai/">AI</a>
         <a href={SITE.repo} rel="noopener">GitHub</a>
       </nav>
-      <a class="btn btn-small" href="/start/quick-start-java/">Get started</a>
+      <a class="btn btn-small" href="/start/install/">Get started</a>
     </div>
   </header>
 
@@ -75,20 +76,21 @@ const ecosystem = [
       <div class="wrap hero-grid">
         <div class="hero-copy">
           <img class="hero-logo" src="/joust-knight.svg" width="200" height="200" alt="JOUST — State Contract Simplified" />
-          <p class="eyebrow"><span class="dot"></span> Java &middot; cardano-client-lib &middot; Plutus V3 &middot; Experimental</p>
-          <h1>State contracts for Cardano, <span class="grad">in Java.</span></h1>
+          <h1>State contracts for Cardano, <span class="grad">in Java or .jsc.</span></h1>
           <p class="lead">
-            Write a state record and the methods that change it. JOUST compiles the same Java method into the
-            on-chain validator and into a typed client on cardano-client-lib, so your contract and the code that
-            calls it can never disagree.
+            Write a state record and the methods that change it. JOUST compiles the same method into the on-chain
+            validator and into a typed client for your app, in Java on cardano-client-lib or in JavaScript
+            (experimental), so your contract and the code that calls it can never disagree.
           </p>
           <div class="ctas">
-            <a class="btn" href="/start/quick-start-java/">Start with Java</a>
-            <a class="btn btn-ghost" href="/start/first-contract/">Your first contract</a>
+            <a class="btn" href="/start/install/">Get started</a>
+            <a class="btn btn-ghost" href="/start/quick-start-java/">Quick start: Java</a>
             <a class="link-arrow" href="/start/why-joust/">Why JOUST &rarr;</a>
           </div>
-          <div class="terminal" aria-label="Run the counter example">
-            <span class="prompt">$</span> ./gradlew :examples:counter:run<span class="caret"></span>
+          <div class="terminal lines" aria-label="Create a JOUST project and run it">
+            <span><span class="prompt">$</span> brew install bloxbean/tap/joust</span>
+            <span><span class="prompt">$</span> joust new my-app &amp;&amp; cd my-app</span>
+            <span><span class="prompt">$</span> ./gradlew run<span class="caret"></span></span>
           </div>
         </div>
         <div class="hero-code">
@@ -158,20 +160,25 @@ const ecosystem = [
     <section class="section alt">
       <div class="wrap">
         <h2>Get started</h2>
-        <p class="sub">Java 25 and Gradle. Run against Yaci DevKit locally, then deploy to the preview testnet.</p>
+        <p class="sub">Install the <code>joust</code> command, create a project, and run it on a local Yaci DevKit. Gradle or npm: pick the path for your app.</p>
         <div class="grid2 start-grid">
           <div class="start">
-            <div class="start-head"><h3>Add JOUST to a Gradle build</h3><span class="pill">JDK 25</span></div>
-            <Code code={GRADLE} lang="groovy" theme={theme} />
-            <a class="link-arrow" href="/start/quick-start-java/">Quick start: Java &rarr;</a>
+            <div class="start-head"><h3>Java or .jsc, with Gradle</h3><span class="pill">JDK 25</span></div>
+            <Code code={START_GRADLE} lang="sh" theme={theme} />
+            <a class="link-arrow" href="/start/quick-start-java/">Quick start: Java &amp; Gradle &rarr;</a>
           </div>
-          <div class="start-list">
-            <a class="card path" href="/start/first-contract/"><h3>Your first contract</h3><p>The Counter, step by step: state, actions, owner checks, views, destroy.</p></a>
-            <a class="card path" href="/tutorials/vault/"><h3>Tutorials</h3><p>Vaults, escrows, tokens in MerkleMaps, banks, pools, a DEX, a multisig treasury and more.</p></a>
-            <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
+          <div class="start">
+            <div class="start-head"><h3>JavaScript, with npm</h3><span class="pill amber">Experimental &middot; Node 22</span></div>
+            <Code code={START_NPM} lang="sh" theme={theme} />
+            <a class="link-arrow" href="/start/quick-start-npm/">Quick start: JavaScript &amp; TypeScript &rarr;</a>
           </div>
         </div>
-        <p class="note">JOUST is experimental, a research and learning project: not for production. Its <a href="https://github.com/bloxbean/joust/releases">releases</a> are in the BloxBean release repository; nothing is on Maven Central yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+        <div class="grid3 start-next">
+          <a class="card path" href="/start/first-contract/"><h3>Your first contract</h3><p>The Counter, step by step: state, actions, owner checks, views, destroy.</p></a>
+          <a class="card path" href="/tutorials/vault/"><h3>Tutorials</h3><p>Vaults, escrows, tokens in MerkleMaps, banks, pools, a DEX, a multisig treasury and more.</p></a>
+          <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
+        </div>
+        <p class="note"><code>joust new</code> writes the JOUST version of the <code>joust</code> that runs it: check the <a href="https://github.com/bloxbean/joust/releases">releases page</a> for the newest release first (<a href="/start/install/">Install JOUST</a>). JOUST is experimental, a research and learning project: not for production. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
       </div>
     </section>
 

@@ -54,8 +54,11 @@ Two readers, often the same person on different days:
   it fails on any other prerelease version literal (`<major>.<minor>.<patch>-pre<n>...`) under `src/`, and on final
   versions in the shapes pages use (`create-joust@1.2.3`, `@julclang/joust@1.2.3`, `joustVersion=1.2.3`,
   `version '1.2.3'`, `org.julclang:julc-state-api:1.2.3`), and prints how many markers it honoured.
+- **Getting started goes through `joust`:** pages tell a new reader to install the `joust` command and run `joust new`
+  (or `npm create joust@latest` on the npm path), then to check the project's JOUST version against the releases page.
+  A JOUST checkout (`git clone`) is for running the examples or building unreleased code, never the first step.
 - **Java path:** JDK 25 and Gradle. JOUST's releases (pre-releases so far) are in the BloxBean release repository,
-  `https://repo.bloxbean.org/maven/releases`, with the JuLC they need; nothing is on Maven Central yet. `joust new`
+  `https://repo.bloxbean.org/maven/releases`, with the JuLC they need (recent releases are on Maven Central too). `joust new`
   (the native `joust`, from Homebrew `bloxbean/tap/joust` or a release's archives) writes a project whose
   `build.gradle` applies the Gradle plugin `org.julclang.joust`, which adds every dependency at matching versions.
   Dependencies by hand: see the [Java quick start](/start/quick-start-java/) and any `examples/<name>/build.gradle`.

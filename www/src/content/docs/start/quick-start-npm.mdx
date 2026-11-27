@@ -3,7 +3,7 @@ title: "Quick start: JavaScript & TypeScript"
 description: (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and call it from a Node script, a test and a browser page.
 ---
 
-import { Aside, Steps, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Aside, Steps, FileTree, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="Experimental">
 The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
@@ -33,6 +33,8 @@ You will:
   faucet) on `:10000`, and the Yaci Viewer explorer on `http://localhost:5173`.
 - **The JOUST npm packages** come from npmjs.org: `npm create joust@latest` installs what it needs. Their versions
   follow JOUST's [releases](https://github.com/bloxbean/joust/releases).
+- **Optionally, the native `joust`** (`brew install bloxbean/tap/joust`), if you also want to create Gradle projects
+  from the same command. [Install JOUST](/start/install/) covers each tool.
 
 ## Create and build the app
 
@@ -40,11 +42,28 @@ You will:
 
 1. **Create the project.**
 
+   <Tabs>
+   <TabItem label="npm">
+
    ```sh
    npm create joust@latest my-app
    cd my-app
    npm install
    ```
+
+   </TabItem>
+   <TabItem label="The native joust">
+
+   ```sh
+   joust new my-app -t node          # the same project npm create joust writes
+   cd my-app
+   npm install
+   ```
+
+   The native `joust` fetches `create-joust` at its own version and runs it, so the project gets that JOUST version.
+
+   </TabItem>
+   </Tabs>
 
    `create-joust` writes a `Counter` contract in `.jsc` (`contracts/app/Counter.jsc`) and a Node script that calls it
    (`index.js`), and names the package after the folder. It refuses a folder that is not empty. Two options change
@@ -57,6 +76,7 @@ You will:
 
    ```sh
    npm create joust@latest my-app -- --lang java
+   joust new my-app -t node -l java          # the same, with the native joust
    ```
 
    The contract is the same in both languages:
@@ -97,7 +117,23 @@ You will:
    `joust build` generates the same description and the same JavaScript client from `Counter.jsc` as from
    `Counter.java`, so nothing else in the project depends on the language.
 
-2. **Build the contract.**
+2. **Check the JOUST version.** The three JOUST packages in `package.json` share one version:
+
+   ```json title="package.json (dependencies)"
+   "@julclang/joust": "<version>",
+   "@julclang/joust-runtime": "<version>",
+   "@julclang/state-client": "<version>"
+   ```
+
+   ```sh
+   npx joust version                     # joust <version> (npm): the project's own @julclang/joust
+   npm view @julclang/joust version      # the newest on npm
+   ```
+
+   Compare it with the newest release on the [releases page](https://github.com/bloxbean/joust/releases). To upgrade,
+   set all three to the new version and run `npm install`.
+
+3. **Build the contract.**
 
    ```sh
    npm run build
@@ -113,7 +149,7 @@ You will:
    The size and hash depend on the contract, its language and the toolchain's version. The four transitions are the contract's
    four methods (`init`, `increment`, `reset`, `close`), compiled so the runtime engine can run them off chain.
 
-3. **Deploy it on DevKit.**
+4. **Deploy it on DevKit.**
 
    ```sh
    npm run deploy
@@ -143,7 +179,7 @@ You will:
    }
    ```
 
-4. **Run the script.**
+5. **Run the script.**
 
    ```sh
    node index.js
@@ -160,7 +196,7 @@ You will:
    state       null
    ```
 
-   `npm start` runs steps 2 to 4 in one go. `index.js` is the whole app:
+   `npm start` runs steps 3 to 5 in one go. `index.js` is the whole app:
 
    ```js title="index.js (abridged)"
    import { joustRuntime, devWallet, devkitTopUp } from '@julclang/joust-runtime';
@@ -186,14 +222,17 @@ You will:
    signs it with the wallet's key and submits it. On chain, the validator runs the same code again and checks the
    result. `counter.deploy()` creates a counter (the contract's `init`); `joust deploy` published the contract.
 
-5. **Run the test.**
+6. **Run the tests.**
 
    ```sh
-   npm test
+   npm test                              # joust test: builds, then runs test/*.test.js offline
+   node --test test/devkit/              # the same calls on DevKit, after npm run build and npm run deploy
    ```
 
-   `test/counter.test.js` makes the same calls with `node:test` and checks each result: the count is 7, an increment
-   of 0 is refused, and the counter is gone after `close`.
+   `test/counter.test.js` makes the same calls against an in-memory ledger, with no chain, and checks each result: the
+   count is 7, an increment of 0 is refused, the counter is gone after `close`, and the attack suite found no
+   mutation the script accepts ([offline tests](/reference/joust-cli/#offline-tests)). `test/devkit/counter.test.js`
+   makes them on DevKit.
 
 </Steps>
 
@@ -207,7 +246,9 @@ You will:
     - Counter.abi.json its ABI manifest (.jsc only)
 - index.js the app: deploys a counter and calls it
 - test/
-  - counter.test.js a Node test on DevKit
+  - counter.test.js the offline test
+  - devkit/
+    - counter.test.js the same calls on DevKit
 - build/ written by joust build and joust deploy
   - joust/
     - generated/ the Java lowered from Counter.jsc, with its source map
@@ -233,14 +274,14 @@ methods marked `@Init`, `@Action`, `@Destroy` and `@View`, in the subset JuLC co
 | `npm start` | `joust build && joust deploy && node index.js` | build, deploy (once per script) and run the app |
 | `npm run build` | `joust build` | compile `contracts/` into `build/joust/` |
 | `npm run deploy` | `joust deploy` | publish the reference scripts on the config's network (DevKit) |
-| `npm test` | `node --test test/*.test.js` | the Node tests |
+| `npm test` | `joust test` | build, then the offline tests |
 
 ## A browser page
 
 `--template web` makes the same project with a page instead of `index.js`:
 
 ```sh
-npm create joust@latest my-web-app -- --template web
+npm create joust@latest my-web-app -- --template web     # or: joust new my-web-app -t web
 cd my-web-app
 npm install
 ```
@@ -256,7 +297,8 @@ npm install
   - main.js the page's code: wallet, review dialog, calls
   - engine.worker.js the runtime engine, in a Web Worker
 - test/
-  - counter.test.js a Node test on DevKit
+  - counter.test.js the offline test
+  - devkit/ the DevKit test
 - joust.config.json
 - vite.config.js the page's Vite config, with @julclang/joust/vite
 - package.json
@@ -270,7 +312,7 @@ The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through every file. 
 | `npm run build` | `joust build` | compile `contracts/` into `build/joust/` |
 | `npm run deploy` | `joust deploy` | publish the reference scripts on the config's network (DevKit) |
 | `npm run deploy:preview` | `joust deploy --network preview` | the same on the preview testnet |
-| `npm test` | `node --test test/*.test.js` | the Node tests |
+| `npm test` | `joust test` | build, then the offline tests |
 | `npm run dev` | `joust dev` | build, deploy, serve the page; rebuild and redeploy on save |
 | `npm run dev:preview` | `joust dev --network preview` | the same on preview |
 | `npm run build:page` | `vite build` | the page as static files in `dist/` |

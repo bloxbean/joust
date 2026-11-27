@@ -1,0 +1,146 @@
+---
+title: Install JOUST
+description: Install the joust command, pick your path (Java or .jsc with Gradle, or JavaScript with npm), set up Yaci DevKit, and check which JOUST version you have.
+---
+
+import { Aside, LinkCard, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Everything starts from one command, `joust`. It creates a project for the path you choose, and inside a project it
+runs that project's build. This page installs it, with the few tools your path needs, and shows how to check which
+JOUST version you are on.
+
+<Aside type="caution" title="Experimental, pre-release">
+
+JOUST is a research and learning project: do not use it in production. Releases come often. The newest one is the
+newest entry on the [releases page](https://github.com/bloxbean/joust/releases) whose tag starts with `v` (not the
+"Development snapshot" entry). Check there before you start, and when something you read here does not match what
+you see.
+
+</Aside>
+
+## Pick your path
+
+| You want to | Contract in | App in | You need | Status |
+|---|---|---|---|---|
+| Build a Cardano app on the JVM | Java | Java, on cardano-client-lib | JDK 25 (Gradle comes with the project) | Supported |
+| Try JOUST's compact contract syntax | [`.jsc`](/languages/jsc/) | Java | JDK 25 | Language preview |
+| Build a Node script or a browser dApp | `.jsc` or Java | JavaScript or TypeScript | Node 22 or newer (no JDK) | Experimental |
+
+You can change your mind later: a contract compiles to the same validator and the same description from either side.
+
+## Install
+
+<Steps>
+
+1. **Install `joust`.**
+
+   <Tabs>
+   <TabItem label="Homebrew (macOS, Linux)">
+
+   ```sh
+   brew install bloxbean/tap/joust
+   ```
+
+   </TabItem>
+   <TabItem label="Release archive">
+
+   Download the archive for your platform (macOS arm64, Linux x86_64 or arm64) from the newest release on the
+   [releases page](https://github.com/bloxbean/joust/releases), unpack it and put `joust` on your `PATH`. To check
+   the download first:
+
+   ```sh
+   shasum -a 256 -c joust-<version>-SHA256SUMS.txt --ignore-missing
+   gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust
+   xattr -d com.apple.quarantine joust     # macOS only: the binary is not notarized
+   ```
+
+   </TabItem>
+   <TabItem label="npm only">
+
+   On the npm path you do not need the native `joust`: `npm create joust@latest` creates a project, and the project's
+   own `@julclang/joust` gives you `npx joust` and the `npm run` scripts. See
+   [Quick start: JavaScript & TypeScript](/start/quick-start-npm/).
+
+   Do not also install `@julclang/joust` globally next to the native `joust`: with Homebrew's Node both use one path.
+   Keep the native one global and `@julclang/joust` per project.
+
+   </TabItem>
+   </Tabs>
+
+   The native `joust` is a single binary: it needs neither a JDK nor Node to run.
+
+2. **Check it.**
+
+   ```sh
+   joust version          # joust <version> (native)
+   ```
+
+   Compare `<version>` with the newest release on the [releases page](https://github.com/bloxbean/joust/releases).
+   `joust new` writes the version of the `joust` that runs it into the project, so upgrade before you create a
+   project (`brew upgrade joust`, or a newer archive).
+
+3. **Install what your path needs.**
+
+   - **Gradle (Java or `.jsc`):** JDK 25. You do not need Gradle: `joust new` writes the Gradle wrapper (`./gradlew`)
+     into the project.
+   - **npm (JavaScript):** Node 22 or newer. The playground (`joust playground`) needs Node 22 too, on
+     both paths.
+
+4. **Start a local Cardano network.** The quick starts run on [Yaci DevKit](https://github.com/bloxbean/yaci-devkit),
+   started with its indexer, Yaci Store:
+
+   ```sh
+   yaci-devkit up --enable-yaci-store
+   ```
+
+   Yaci Store then answers on `http://localhost:8080` (a Blockfrost-compatible API), the DevKit admin API on
+   `http://localhost:10000` (slot clock, faucet), and the Yaci Viewer explorer on `http://localhost:5173`. See
+   [Networks and chain providers](/apps/networks-and-providers/).
+
+</Steps>
+
+## Which JOUST version a project uses
+
+A project pins its JOUST version in one place. Upgrading JOUST means changing that version, after checking the
+[releases page](https://github.com/bloxbean/joust/releases) for the newest one.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```groovy title="build.gradle"
+plugins {
+    id 'application'
+    id 'org.julclang.joust' version '<version>'    // the JOUST release
+}
+```
+
+The Gradle plugin brings every other version (JuLC, cardano-client-lib) from the JOUST release it belongs to, so
+they always match. See [Gradle builds](/apps/gradle-builds/).
+
+</TabItem>
+<TabItem label=".jsc">
+
+The same `build.gradle` line as for Java: a `.jsc` project on Gradle is a Java project with its contract in
+`src/main/jsc/`.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```json title="package.json (dependencies)"
+"@julclang/joust": "<version>",
+"@julclang/joust-runtime": "<version>",
+"@julclang/state-client": "<version>"
+```
+
+All three are released together, at the same version. `npx joust version` prints the one the project uses, and
+`npm view @julclang/joust version` the newest on npm.
+
+</TabItem>
+</Tabs>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Quick start: Java & Gradle" href="/start/quick-start-java/" description="joust new, build, test and run a counter on DevKit (Java or .jsc)." />
+  <LinkCard title="Quick start: JavaScript & TypeScript" href="/start/quick-start-npm/" description="(Experimental) The same counter from Node and a browser page, with npm only." />
+</CardGrid>

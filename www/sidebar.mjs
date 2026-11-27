@@ -6,7 +6,8 @@ export const SIDEBAR = [
     items: [
       { label: 'Why JOUST', slug: 'start/why-joust' },
       { label: 'How JOUST works', slug: 'start/how-it-works' },
-      { label: 'Quick start: Java', slug: 'start/quick-start-java' },
+      { label: 'Install JOUST', slug: 'start/install' },
+      { label: 'Quick start: Java & Gradle', slug: 'start/quick-start-java' },
       { label: 'Your first contract', slug: 'start/first-contract' },
       { label: 'Quick start: JavaScript & TypeScript', slug: 'start/quick-start-npm', badge: { text: 'Experimental', variant: 'caution' } },
     ],
@@ -44,7 +45,7 @@ export const SIDEBAR = [
       { label: 'Params, invariants and events', slug: 'contracts/params-invariants-events' },
       { label: 'MerkleMaps', slug: 'contracts/merklemaps' },
       { label: 'Owned objects', slug: 'contracts/owned-objects' },
-      { label: 'Keyed objects', slug: 'contracts/keyed-objects', badge: { text: 'Next release', variant: 'note' } },
+      { label: 'Keyed objects', slug: 'contracts/keyed-objects' },
       { label: 'Batched intents', slug: 'contracts/batched-intents' },
       { label: 'Native assets, mints and sends', slug: 'contracts/assets-mints-sends' },
       { label: 'Reads and composition', slug: 'contracts/reads-and-composition' },
@@ -59,6 +60,7 @@ export const SIDEBAR = [
   {
     label: 'Building apps: Java',
     items: [
+      { label: 'Gradle builds', slug: 'apps/gradle-builds' },
       { label: 'The Java off-chain runtime', slug: 'apps/java-runtime' },
     ],
   },
