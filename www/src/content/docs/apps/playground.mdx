@@ -4,6 +4,7 @@ description: Try every contract of a project in a browser with joust playground 
 ---
 
 import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import startShot from '../../../assets/playground/playground-start.webp';
 
 `joust playground` builds your project and opens a page in your browser where you can call every contract it
 contains. You do not write a client or a page first. The page lists your contracts, gives you three test
@@ -81,6 +82,10 @@ The browser opens the page. **Ctrl-C** in the terminal stops the playground.
 
 ## Your first five minutes
 
+<a href={startShot.src} title="Open the full-size image"><img src={startShot.src} width={startShot.width} height={startShot.height} alt="The playground on first load: the OFFLINE banner, the identities Alice, Bob and Carol, the Counter contract with its operations, and the empty History and Log" /></a>
+
+*The whole page on first load (open the image for full size).*
+
 The page has three columns. On the left: **Identities** (who signs) and **Contracts** (this project's build). In the
 middle: the chosen contract's **Instances** (with their state), its **Views**, and its **Operations**, one card per
 call. On the right: **History** (newest first) and **Log**. The banner at the top says the mode (**OFFLINE** or
@@ -110,6 +115,8 @@ With the Counter from either quick start ([Java](/start/quick-start-java/), or
    history shows "declined".
 
 </Steps>
+
+![After the steps: the counter's state shows count 5, and the History shows Bob's reset refused at stage host above Alice's confirmed calls, each with its attack-suite result](../../../assets/playground/playground-state.webp)
 
 That loop (pick, fill in, review, approve) is all there is to every call. The rest of this page is the detail.
 
@@ -163,6 +170,8 @@ views are not available there; the instance's state is still shown.
 
 Before any identity signs, the page shows a review dialog. Everything in it is read from the transaction body and
 the chain, not from what the dev host claims:
+
+![The review dialog for init: signer, transaction id, fee, what Alice pays in all, validity, signers, scripts run, outputs, the state before and after, and the Decline and Approve and sign as Alice buttons](../../../assets/playground/playground-review.webp)
 
 | Row | What it shows |
 |---|---|
